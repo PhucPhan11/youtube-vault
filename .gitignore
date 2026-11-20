@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Môi trường ảo & công cụ
+.venv/
+.pytest_cache/
+
+# IDE / công cụ cục bộ
+.idea/
+.vscode/
+.mcp.json
+.claude/settings.local.json
