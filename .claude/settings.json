@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(uv sync)",
+      "Bash(uv run pytest *)",
+      "Bash(uv run pytest)",
+      "Bash(uv run youtube-vault --help)",
+      "Bash(uv run youtube-vault * --help)",
+      "Bash(uv run youtube-vault info *)",
+      "Bash(uv run youtube-vault history list *)",
+      "Bash(uv run youtube-vault history list)",
+      "Bash(git status *)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "mcp__idea__get_file_problems",
+      "mcp__idea__get_run_configurations",
+      "mcp__idea__get_symbol_info",
+      "mcp__idea__get_python_environment",
+      "mcp__idea__get_project_modules",
+      "mcp__idea__search_file",
+      "mcp__idea__search_regex",
+      "mcp__idea__search_symbol",
+      "mcp__idea__search_text",
+      "mcp__idea__read_file",
+      "mcp__idea__list_directory_tree",
+      "mcp__idea__lint_files"
+    ]
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run --quiet --project \"$CLAUDE_PROJECT_DIR\" python \"$CLAUDE_PROJECT_DIR/.claude/hooks/run_tests.py\"",
+            "timeout": 180,
+            "statusMessage": "Running pytest..."
+          }
+        ]
+      }
+    ]
+  }
+}
