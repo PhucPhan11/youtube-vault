@@ -13,6 +13,9 @@ dependencies = [
 [project.scripts]
 youtube-vault = "youtube_vault.cli:app"
 
+[project.gui-scripts]
+youtube-vault-gui = "youtube_vault.gui:main"
+
 [dependency-groups]
 dev = [
     "pytest",

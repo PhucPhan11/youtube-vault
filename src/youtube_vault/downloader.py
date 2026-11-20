@@ -8,14 +8,16 @@ from __future__ import annotations
 
 import platform
 import shutil
+import threading
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import yt_dlp
-from yt_dlp.utils import DownloadError
+from yt_dlp.utils import DownloadCancelled, DownloadError
 
+from .history import History, HistoryArchive, HistoryRecord, HistoryRecorder
 from .config import (
     AUDIO_FORMATS,
     DEFAULT_AUDIO_FORMAT,
@@ -26,6 +28,7 @@ from .config import (
 )
 
 __all__ = [
+    "DownloadCancelledError",
     "DownloadFailedError",
     "FFmpegNotFoundError",
     "FormatInfo",
@@ -60,6 +63,10 @@ class DownloadFailedError(YoutubeVaultError):
     """yt-dlp báo lỗi khi lấy thông tin hoặc tải."""
 
 
+class DownloadCancelledError(YoutubeVaultError):
+    """Việc tải bị dừng theo yêu cầu (qua ``cancel_event``)."""
+
+
 # --------------------------------------------------------------------------- #
 # Tiến độ
 # --------------------------------------------------------------------------- #
@@ -67,7 +74,7 @@ class DownloadFailedError(YoutubeVaultError):
 class ProgressEvent:
     """Trạng thái tiến độ của một file, độc lập với yt-dlp."""
 
-    status: str  # "downloading" | "finished" | "error"
+    status: str  # "downloading" | "finished" | "error" | "skipped"
     filename: str
     downloaded_bytes: int = 0
     total_bytes: int | None = None
@@ -75,6 +82,7 @@ class ProgressEvent:
     eta: int | None = None  # giây
     playlist_index: int | None = None
     playlist_count: int | None = None
+    title: str | None = None
 
     @property
     def percent(self) -> float | None:
@@ -97,12 +105,19 @@ def _to_progress_event(d: dict[str, Any]) -> ProgressEvent:
         eta=d.get("eta"),
         playlist_index=info.get("playlist_index"),
         playlist_count=info.get("n_entries") or info.get("playlist_count"),
+        title=info.get("title"),
     )
 
 
-def _make_hook(callback: ProgressCallback) -> Callable[[dict[str, Any]], None]:
+def _make_hook(
+    callback: ProgressCallback | None,
+    cancel_event: threading.Event | None = None,
+) -> Callable[[dict[str, Any]], None]:
     def hook(d: dict[str, Any]) -> None:
-        callback(_to_progress_event(d))
+        if cancel_event is not None and cancel_event.is_set():
+            raise DownloadCancelled("Đã dừng theo yêu cầu")
+        if callback is not None:
+            callback(_to_progress_event(d))
 
     return hook
 
@@ -224,7 +239,11 @@ def get_info(url: str) -> MediaInfo:
 # --------------------------------------------------------------------------- #
 # Tải
 # --------------------------------------------------------------------------- #
-def _base_opts(output_dir: Path, progress_callback: ProgressCallback | None) -> dict[str, Any]:
+def _base_opts(
+    output_dir: Path,
+    progress_callback: ProgressCallback | None,
+    cancel_event: threading.Event | None = None,
+) -> dict[str, Any]:
     opts: dict[str, Any] = {
         "outtmpl": str(output_dir / OUTPUT_TEMPLATE),
         "quiet": True,
@@ -232,8 +251,8 @@ def _base_opts(output_dir: Path, progress_callback: ProgressCallback | None) -> 
         "noprogress": True,
         "noplaylist": False,
     }
-    if progress_callback is not None:
-        opts["progress_hooks"] = [_make_hook(progress_callback)]
+    if progress_callback is not None or cancel_event is not None:
+        opts["progress_hooks"] = [_make_hook(progress_callback, cancel_event)]
     return opts
 
 
@@ -248,11 +267,43 @@ def _iter_filepaths(info: dict[str, Any] | None) -> Iterator[Path]:
             yield Path(path)
 
 
-def _run(url: str, opts: dict[str, Any]) -> list[Path]:
+def _run(
+    url: str,
+    opts: dict[str, Any],
+    *,
+    kind: str,
+    progress_callback: ProgressCallback | None,
+    history: History | None,
+    force: bool,
+    cancel_event: threading.Event | None,
+) -> list[Path]:
+    if cancel_event is not None and cancel_event.is_set():
+        raise DownloadCancelledError("Đã dừng theo yêu cầu")
+
+    if history is not None and not force:
+
+        def on_skip(record: HistoryRecord) -> None:
+            if progress_callback is not None:
+                progress_callback(
+                    ProgressEvent(
+                        status="skipped",
+                        filename=record.filepath or "",
+                        title=record.title,
+                    )
+                )
+
+        opts["download_archive"] = HistoryArchive(history, kind, on_skip=on_skip)
+
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
+            if history is not None:
+                ydl.add_post_processor(HistoryRecorder(history, kind), when="after_move")
             info = ydl.extract_info(url, download=True)
+    except DownloadCancelled as exc:
+        raise DownloadCancelledError(str(exc)) from exc
     except DownloadError as exc:
+        if cancel_event is not None and cancel_event.is_set():
+            raise DownloadCancelledError("Đã dừng theo yêu cầu") from exc
         raise DownloadFailedError(str(exc)) from exc
     return list(dict.fromkeys(_iter_filepaths(info)))
 
@@ -262,8 +313,16 @@ def download_video(
     quality: str = DEFAULT_QUALITY,
     output_dir: Path | str = DEFAULT_OUTPUT_DIR,
     progress_callback: ProgressCallback | None = None,
+    *,
+    history: History | None = None,
+    force: bool = False,
+    cancel_event: threading.Event | None = None,
 ) -> list[Path]:
     """Tải video mp4 (ghép video + audio). Hỗ trợ URL playlist.
+
+    - ``history``: nếu có, ghi lịch sử và bỏ qua video đã tải (trừ khi ``force``).
+      Video bị bỏ qua được báo qua callback với ``status="skipped"``.
+    - ``cancel_event``: set event này để dừng → ``DownloadCancelledError``.
 
     Trả về danh sách đường dẫn các file đã lưu.
     """
@@ -275,10 +334,18 @@ def download_video(
     out = Path(output_dir).expanduser()
     out.mkdir(parents=True, exist_ok=True)
 
-    opts = _base_opts(out, progress_callback)
+    opts = _base_opts(out, progress_callback, cancel_event)
     opts["format"] = QUALITY_PRESETS[quality]
     opts["merge_output_format"] = "mp4"
-    return _run(url, opts)
+    return _run(
+        url,
+        opts,
+        kind="video",
+        progress_callback=progress_callback,
+        history=history,
+        force=force,
+        cancel_event=cancel_event,
+    )
 
 
 def download_audio(
@@ -286,8 +353,15 @@ def download_audio(
     fmt: str = DEFAULT_AUDIO_FORMAT,
     output_dir: Path | str = DEFAULT_OUTPUT_DIR,
     progress_callback: ProgressCallback | None = None,
+    *,
+    history: History | None = None,
+    force: bool = False,
+    cancel_event: threading.Event | None = None,
 ) -> list[Path]:
-    """Chỉ tải audio và chuyển sang ``fmt`` (mặc định mp3). Hỗ trợ URL playlist."""
+    """Chỉ tải audio và chuyển sang ``fmt`` (mặc định mp3). Hỗ trợ URL playlist.
+
+    ``history``/``force``/``cancel_event``: như ``download_video``.
+    """
     if fmt not in AUDIO_FORMATS:
         raise ValueError(
             f"Định dạng audio không hợp lệ: {fmt!r}. Chọn một trong: {', '.join(AUDIO_FORMATS)}"
@@ -296,9 +370,17 @@ def download_audio(
     out = Path(output_dir).expanduser()
     out.mkdir(parents=True, exist_ok=True)
 
-    opts = _base_opts(out, progress_callback)
+    opts = _base_opts(out, progress_callback, cancel_event)
     opts["format"] = "bestaudio/best"
     opts["postprocessors"] = [
         {"key": "FFmpegExtractAudio", "preferredcodec": fmt, "preferredquality": "0"},
     ]
-    return _run(url, opts)
+    return _run(
+        url,
+        opts,
+        kind="audio",
+        progress_callback=progress_callback,
+        history=history,
+        force=force,
+        cancel_event=cancel_event,
+    )

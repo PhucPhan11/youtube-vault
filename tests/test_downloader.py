@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,7 @@ from yt_dlp.utils import DownloadError
 from youtube_vault import downloader
 from youtube_vault.config import OUTPUT_TEMPLATE, QUALITY_PRESETS
 from youtube_vault.downloader import (
+    DownloadCancelledError,
     DownloadFailedError,
     FFmpegNotFoundError,
     ProgressEvent,
@@ -16,6 +18,7 @@ from youtube_vault.downloader import (
     ffmpeg_install_instructions,
     get_info,
 )
+from youtube_vault.history import HistoryArchive, HistoryRecorder
 
 
 # ---------------------------- download_video ------------------------------- #
@@ -211,3 +214,109 @@ def test_ffmpeg_install_instructions_per_os(monkeypatch, system, expected):
     text = ffmpeg_install_instructions()
     assert expected in text
     assert "https://ffmpeg.org/download.html" in text
+
+
+# --------------------------- history & cancel ------------------------------ #
+_DONE_INFO = {
+    "id": "abc",
+    "extractor_key": "Youtube",
+    "title": "Clip",
+    "webpage_url": "https://youtu.be/abc",
+    "requested_downloads": [{"filepath": "out/Clip [abc].mp4"}],
+}
+
+
+def test_history_wires_archive_and_recorder(fake_ydl, ffmpeg_present, tmp_path, history):
+    fake_ydl.result = dict(_DONE_INFO)
+    files = download_video("https://youtu.be/abc", output_dir=tmp_path, history=history)
+
+    inst = fake_ydl.instances[0]
+    assert isinstance(inst.opts["download_archive"], HistoryArchive)
+    assert inst.opts["download_archive"].kind == "video"
+    assert [(type(pp), when) for pp, when in inst.post_processors] == [
+        (HistoryRecorder, "after_move")
+    ]
+    assert files == [Path("out/Clip [abc].mp4")]
+    rec = history.get("youtube abc", "video")
+    assert rec is not None and rec.title == "Clip"
+
+
+def test_already_downloaded_is_skipped(fake_ydl, ffmpeg_present, tmp_path, history):
+    history.add("youtube abc", "video", title="Clip", filepath="old.mp4")
+    fake_ydl.result = dict(_DONE_INFO)
+    events: list[ProgressEvent] = []
+
+    files = download_video(
+        "https://youtu.be/abc", output_dir=tmp_path, history=history,
+        progress_callback=events.append,
+    )
+
+    assert files == []
+    assert [(e.status, e.title, e.filename) for e in events] == [("skipped", "Clip", "old.mp4")]
+
+
+def test_audio_not_skipped_when_only_video_in_history(fake_ydl, ffmpeg_present, tmp_path, history):
+    history.add("youtube abc", "video")
+    fake_ydl.result = dict(_DONE_INFO)
+    files = download_audio("https://youtu.be/abc", output_dir=tmp_path, history=history)
+    assert files  # vẫn tải
+    assert history.contains("youtube abc", "audio")
+
+
+def test_force_disables_archive_but_still_records(fake_ydl, ffmpeg_present, tmp_path, history):
+    history.add("youtube abc", "video", title="Old")
+    fake_ydl.result = dict(_DONE_INFO)
+    files = download_video(
+        "https://youtu.be/abc", output_dir=tmp_path, history=history, force=True
+    )
+    inst = fake_ydl.instances[0]
+    assert "download_archive" not in inst.opts
+    assert len(inst.post_processors) == 1
+    assert files
+    assert history.get("youtube abc", "video").title == "Clip"
+
+
+def test_without_history_no_archive_no_recorder(fake_ydl, ffmpeg_present, tmp_path):
+    download_video("https://youtu.be/x", output_dir=tmp_path)
+    inst = fake_ydl.instances[0]
+    assert "download_archive" not in inst.opts
+    assert inst.post_processors == []
+
+
+def test_cancel_event_already_set(fake_ydl, ffmpeg_present, tmp_path):
+    ev = threading.Event()
+    ev.set()
+    with pytest.raises(DownloadCancelledError):
+        download_video("https://youtu.be/x", output_dir=tmp_path, cancel_event=ev)
+    assert fake_ydl.instances == []
+
+
+def test_cancel_during_download_raises(fake_ydl, ffmpeg_present, tmp_path):
+    ev = threading.Event()
+    fake_ydl.hook_events = [
+        {"status": "downloading", "filename": "v.mp4", "downloaded_bytes": 1},
+        {"status": "downloading", "filename": "v.mp4", "downloaded_bytes": 2},
+    ]
+    seen: list[ProgressEvent] = []
+
+    def cb(e: ProgressEvent) -> None:
+        seen.append(e)
+        ev.set()  # dừng sau sự kiện đầu tiên
+
+    with pytest.raises(DownloadCancelledError):
+        download_video("https://youtu.be/x", output_dir=tmp_path, progress_callback=cb, cancel_event=ev)
+    assert len(seen) == 1
+
+
+def test_cancel_hook_installed_without_callback(fake_ydl, ffmpeg_present, tmp_path):
+    download_video("https://youtu.be/x", output_dir=tmp_path, cancel_event=threading.Event())
+    assert len(fake_ydl.instances[0].opts["progress_hooks"]) == 1
+
+
+def test_progress_event_has_title(fake_ydl, ffmpeg_present, tmp_path):
+    fake_ydl.hook_events = [
+        {"status": "downloading", "filename": "v.mp4", "info_dict": {"title": "Hello"}},
+    ]
+    events: list[ProgressEvent] = []
+    download_video("https://youtu.be/x", output_dir=tmp_path, progress_callback=events.append)
+    assert events[0].title == "Hello"

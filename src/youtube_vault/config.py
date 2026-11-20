@@ -28,3 +28,13 @@ DEFAULT_QUALITY: str = "best"
 
 AUDIO_FORMATS: tuple[str, ...] = ("mp3", "m4a", "opus", "wav")
 DEFAULT_AUDIO_FORMAT: str = "mp3"
+
+# Dữ liệu ứng dụng (lịch sử tải)
+DATA_DIR: Path = Path.home() / ".youtube-vault"
+HISTORY_DB: Path = DATA_DIR / "history.db"
+
+# Hàng đợi tải
+DEFAULT_MAX_WORKERS: int = 2
+MAX_WORKERS_LIMIT: int = 5
+DEFAULT_MAX_RETRIES: int = 2
+RETRY_DELAYS: tuple[float, ...] = (2, 5)  # giây chờ trước mỗi lần thử lại

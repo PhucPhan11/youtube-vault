@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from collections.abc import Callable
 from enum import Enum
 from pathlib import Path
@@ -29,6 +30,8 @@ from .downloader import (
     ProgressEvent,
     YoutubeVaultError,
 )
+from .history import History
+from .platform_utils import open_folder
 
 app = typer.Typer(
     help="youtube-vault — tải video/audio YouTube về máy (dùng yt-dlp).",
@@ -56,6 +59,10 @@ class AudioFormat(str, Enum):
 OutOption = Annotated[
     Path,
     typer.Option("--out", "-o", help="Thư mục lưu file.", file_okay=False),
+]
+ForceOption = Annotated[
+    bool,
+    typer.Option("--force", help="Tải lại kể cả khi đã có trong lịch sử."),
 ]
 
 
@@ -99,6 +106,12 @@ def _progress_callback(progress: Progress) -> Callable[[ProgressEvent], None]:
     tasks: dict[str, TaskID] = {}
 
     def callback(event: ProgressEvent) -> None:
+        if event.status == "skipped":
+            progress.console.print(
+                f"[yellow]⏭ Đã có trong lịch sử, bỏ qua:[/] {event.title or event.filename}"
+                " [dim](dùng --force để tải lại)[/]"
+            )
+            return
         key = event.filename
         if key not in tasks:
             name = Path(key).name or "đang tải"
@@ -133,7 +146,7 @@ def _run_download(action: Callable[[Callable[[ProgressEvent], None]], list[Path]
         raise typer.Exit(1) from None
 
     if not files:
-        console.print("[yellow]Không có file nào được tải.[/]")
+        console.print("[yellow]Không có file mới nào được tải.[/]")
         return
     console.print(f"[bold green]Đã lưu {len(files)} file:[/]")
     for f in files:
@@ -150,11 +163,18 @@ def video(
         Quality, typer.Option("--quality", "-q", help="Chất lượng video.")
     ] = Quality.best,
     out: OutOption = DEFAULT_OUTPUT_DIR,
+    force: ForceOption = False,
 ) -> None:
     """Tải video mp4 (ghép video + audio)."""
+    hist = _open_history()
     _run_download(
         lambda cb: downloader.download_video(
-            url, quality=quality.value, output_dir=out, progress_callback=cb
+            url,
+            quality=quality.value,
+            output_dir=out,
+            progress_callback=cb,
+            history=hist,
+            force=force,
         )
     )
 
@@ -166,13 +186,113 @@ def audio(
         AudioFormat, typer.Option("--format", "-f", help="Định dạng audio.")
     ] = AudioFormat.mp3,
     out: OutOption = DEFAULT_OUTPUT_DIR,
+    force: ForceOption = False,
 ) -> None:
     """Chỉ tải audio."""
+    hist = _open_history()
     _run_download(
         lambda cb: downloader.download_audio(
-            url, fmt=fmt.value, output_dir=out, progress_callback=cb
+            url,
+            fmt=fmt.value,
+            output_dir=out,
+            progress_callback=cb,
+            history=hist,
+            force=force,
         )
     )
+
+
+@app.command()
+def gui() -> None:
+    """Mở giao diện desktop (hàng đợi tải + lịch sử)."""
+    from .gui import main as gui_main  # import lười: CLI không cần tkinter
+
+    gui_main()
+
+
+# --------------------------------------------------------------------------- #
+# Lịch sử
+# --------------------------------------------------------------------------- #
+history_app = typer.Typer(help="Xem và quản lý lịch sử tải.", no_args_is_help=True)
+app.add_typer(history_app, name="history")
+
+
+def _open_history() -> History | None:
+    try:
+        return History()
+    except (OSError, sqlite3.Error) as exc:
+        err_console.print(f"[yellow]Không mở được lịch sử ({exc}); tiếp tục mà không ghi lịch sử.[/]")
+        return None
+
+
+def _require_history() -> History:
+    hist = _open_history()
+    if hist is None:
+        raise typer.Exit(1)
+    return hist
+
+
+@history_app.command("list")
+def history_list(
+    limit: Annotated[int, typer.Option("--limit", "-n", min=1, help="Số mục tối đa.")] = 20,
+    search: Annotated[
+        str | None, typer.Option("--search", "-s", help="Tìm theo tiêu đề hoặc URL.")
+    ] = None,
+) -> None:
+    """Liệt kê các lần tải gần nhất."""
+    records = _require_history().list(limit=limit, search=search)
+    if not records:
+        console.print("[yellow]Lịch sử trống.[/]" if not search else "[yellow]Không có kết quả.[/]")
+        return
+    table = Table("ID", "Thời gian", "Loại", "Tiêu đề", "File")
+    for r in records:
+        table.add_row(
+            str(r.id),
+            r.downloaded_at.replace("T", " "),
+            r.kind,
+            r.title or "?",
+            r.filepath or "",
+        )
+    console.print(table)
+
+
+@history_app.command("remove")
+def history_remove(
+    record_id: Annotated[int, typer.Argument(help="ID trong lịch sử (xem bằng `history list`).")],
+) -> None:
+    """Xóa một mục khỏi lịch sử (không xóa file đã tải)."""
+    if _require_history().remove(record_id):
+        console.print(f"[green]Đã xóa mục {record_id} khỏi lịch sử.[/]")
+    else:
+        err_console.print(f"[red]Không có mục {record_id}.[/]")
+        raise typer.Exit(1)
+
+
+@history_app.command("clear")
+def history_clear(
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Không hỏi xác nhận.")] = False,
+) -> None:
+    """Xóa toàn bộ lịch sử (không xóa file đã tải)."""
+    if not yes and not typer.confirm("Xóa toàn bộ lịch sử tải?"):
+        raise typer.Abort()
+    count = _require_history().clear()
+    console.print(f"[green]Đã xóa {count} mục.[/]")
+
+
+@history_app.command("open")
+def history_open(
+    record_id: Annotated[int, typer.Argument(help="ID trong lịch sử.")],
+) -> None:
+    """Mở thư mục chứa file đã tải."""
+    record = _require_history().get_by_id(record_id)
+    if record is None or not record.filepath:
+        err_console.print(f"[red]Không có mục {record_id} hoặc mục này không có đường dẫn file.[/]")
+        raise typer.Exit(1)
+    try:
+        open_folder(record.filepath)
+    except FileNotFoundError as exc:
+        err_console.print(f"[red]{exc}[/]")
+        raise typer.Exit(1) from None
 
 
 @app.command()
