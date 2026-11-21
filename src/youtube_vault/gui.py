@@ -16,11 +16,12 @@ from pathlib import Path
 from queue import Empty, SimpleQueue
 from tkinter import filedialog, messagebox, ttk
 
-from . import downloader
+from . import config, downloader
 from . import recorder as recorder_mod
 from .config import (
     AUDIO_FORMATS,
     AUDIO_QUALITIES,
+    COOKIES_BROWSERS,
     DEFAULT_AUDIO_FORMAT,
     DEFAULT_AUDIO_QUALITY,
     DEFAULT_EMBED_METADATA,
@@ -31,6 +32,7 @@ from .config import (
 )
 from .download_queue import DownloadItem, DownloadQueue, ItemStatus
 from .downloader import (
+    Cookies,
     FFmpegNotFoundError,
     MediaInfo,
     ResolutionOption,
@@ -57,6 +59,10 @@ BEST_BITRATE_LABEL = "Tốt nhất (VBR)"
 DEFAULT_DEVICE_LABEL = "Loa mặc định"
 RECORD_START_TEXT = "● Bắt đầu ghi"
 RECORD_STOP_TEXT = "■ Dừng & lưu"
+COOKIES_NONE_LABEL = "Không dùng"
+COOKIES_FILE_LABEL = "File cookies.txt"
+# Nhãn -> tên trình duyệt cho yt-dlp, vd. "Trình duyệt: firefox" -> "firefox".
+COOKIES_BROWSER_LABELS: dict[str, str] = {f"Trình duyệt: {b}": b for b in COOKIES_BROWSERS}
 
 STATUS_LABELS: dict[ItemStatus, str] = {
     ItemStatus.QUEUED: "Đang chờ",
@@ -250,7 +256,7 @@ class App(ttk.Frame):
         box.pack(fill="x")
         box.columnconfigure(1, weight=1)
 
-        ttk.Label(box, text="URL (mỗi dòng một link,\ncó thể là playlist):").grid(
+        ttk.Label(box, text="URL YouTube, Facebook…\n(mỗi dòng một link,\ncó thể là playlist):").grid(
             row=0, column=0, sticky="nw", padx=(0, 8)
         )
         self.url_text = tk.Text(box, height=4, wrap="none", undo=True)
@@ -309,6 +315,27 @@ class App(ttk.Frame):
         self.add_button.grid(row=4, column=3, padx=(6, 0), pady=(6, 0))
         self.mp3_button = ttk.Button(box, text="Tải MP3", command=self.add_mp3_from_input)
         self.mp3_button.grid(row=4, column=4, padx=(6, 0), pady=(6, 0))
+
+        # Cookie đăng nhập: cần cho video Facebook riêng tư/nhóm...
+        ttk.Label(box, text="Cookie đăng nhập:").grid(row=5, column=0, sticky="w", pady=(6, 0))
+        cookie_row = ttk.Frame(box)
+        cookie_row.grid(row=5, column=1, sticky="ew", pady=(6, 0))
+        cookie_row.columnconfigure(1, weight=1)
+        default_file = Path(config.DEFAULT_COOKIES_FILE)
+        has_default = default_file.is_file()
+        self.cookies_mode_var = tk.StringVar(
+            value=COOKIES_FILE_LABEL if has_default else COOKIES_NONE_LABEL)
+        mode_combo = ttk.Combobox(
+            cookie_row, width=22, state="readonly", textvariable=self.cookies_mode_var,
+            values=[COOKIES_NONE_LABEL, COOKIES_FILE_LABEL, *COOKIES_BROWSER_LABELS])
+        mode_combo.grid(row=0, column=0, sticky="w")
+        mode_combo.bind("<<ComboboxSelected>>", lambda e: self._on_cookies_mode_change())
+        self.cookies_file_var = tk.StringVar(value=str(default_file) if has_default else "")
+        self.cookies_entry = ttk.Entry(cookie_row, textvariable=self.cookies_file_var)
+        self.cookies_entry.grid(row=0, column=1, sticky="ew", padx=(6, 0))
+        ttk.Button(box, text="Chọn…", command=self._choose_cookies_file).grid(
+            row=5, column=2, padx=(6, 0), pady=(6, 0))
+        self._on_cookies_mode_change()
 
     def _build_notebook(self) -> None:
         self.notebook = ttk.Notebook(self)
@@ -592,6 +619,11 @@ class App(ttk.Frame):
             messagebox.showinfo("Chưa có URL", "Hãy dán link video cần xem độ phân giải.",
                                 parent=self.root)
             return
+        try:
+            cookies = self.selected_cookies()
+        except ValueError as exc:
+            messagebox.showwarning("Cookie đăng nhập", str(exc), parent=self.root)
+            return
         url = urls[0]
         note = " (video đầu tiên)" if len(urls) > 1 else ""
         self.res_button.configure(state="disabled")
@@ -599,7 +631,7 @@ class App(ttk.Frame):
 
         def work() -> None:  # luồng nền: KHÔNG đụng vào widget, chỉ gửi kết quả qua _ui_calls
             try:
-                media = downloader.get_info(url)
+                media = downloader.get_info(url, cookies=cookies)
                 options = downloader.list_resolutions(media)
             except Exception as exc:
                 self._ui_calls.put(lambda e=exc: self._on_resolutions_failed(e))
@@ -631,6 +663,33 @@ class App(ttk.Frame):
         if chosen:
             self.out_var.set(chosen)
 
+    def _choose_cookies_file(self) -> None:
+        chosen = filedialog.askopenfilename(
+            parent=self.root,
+            title="Chọn file cookies.txt",
+            filetypes=[("cookies.txt", "*.txt"), ("Tất cả", "*.*")],
+        )
+        if chosen:
+            self.cookies_file_var.set(chosen)
+            self.cookies_mode_var.set(COOKIES_FILE_LABEL)
+            self._on_cookies_mode_change()
+
+    def _on_cookies_mode_change(self) -> None:
+        state = "normal" if self.cookies_mode_var.get() == COOKIES_FILE_LABEL else "disabled"
+        self.cookies_entry.configure(state=state)
+
+    def selected_cookies(self) -> Cookies | None:
+        """Nguồn cookie đang chọn. Ném ``ValueError`` nếu file không tồn tại."""
+        mode = self.cookies_mode_var.get()
+        if mode == COOKIES_FILE_LABEL:
+            path = self.cookies_file_var.get().strip()
+            if not path:
+                raise ValueError("Hãy chọn file cookies.txt.")
+            return Cookies.resolve(file=path)
+        if mode in COOKIES_BROWSER_LABELS:
+            return Cookies.resolve(browser=COOKIES_BROWSER_LABELS[mode])
+        return None
+
     def add_from_input(self) -> list[DownloadItem]:
         """Nút "Thêm vào hàng đợi": dùng loại/định dạng đang chọn."""
         return self._add_urls(self.kind_var.get(), self.audio_var.get())
@@ -649,10 +708,15 @@ class App(ttk.Frame):
             )
         if not urls:
             if not invalid:
-                messagebox.showinfo("Chưa có URL", "Hãy dán ít nhất một link YouTube.",
+                messagebox.showinfo("Chưa có URL", "Hãy dán ít nhất một link video.",
                                     parent=self.root)
             return []
 
+        try:
+            cookies = self.selected_cookies()
+        except ValueError as exc:
+            messagebox.showwarning("Cookie đăng nhập", str(exc), parent=self.root)
+            return []
         out = self.out_var.get().strip() or str(DEFAULT_OUTPUT_DIR)
         quality = self.selected_quality()
         items = [
@@ -665,6 +729,7 @@ class App(ttk.Frame):
                 force=self.force_var.get(),
                 audio_quality=self.selected_bitrate(),
                 embed_metadata=self.embed_var.get(),
+                cookies=cookies,
             )
             for url in urls
         ]

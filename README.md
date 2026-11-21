@@ -1,11 +1,12 @@
 # youtube-vault
 
-Công cụ dòng lệnh để tải video và audio YouTube về máy, xây dựng trên [yt-dlp](https://github.com/yt-dlp/yt-dlp).
+Công cụ dòng lệnh để tải video và audio **YouTube, Facebook** (và các trang khác mà yt-dlp hỗ trợ) về máy, xây dựng trên [yt-dlp](https://github.com/yt-dlp/yt-dlp).
 
 - Tải video mp4 (tự ghép luồng video + audio), chọn độ phân giải từ `best`, 8K/4K, `1440` … `144`, hoặc **chọn từ danh sách độ phân giải mà video thực sự có**
 - Chỉ tải audio (`mp3`, `m4a`, `opus`, `wav`), chọn bitrate (`best`, `320` … `128` kbps), tự gắn tiêu đề/nghệ sĩ và ảnh bìa (thumbnail) vào file
 - Xem thông tin video/playlist mà không cần tải
 - Hỗ trợ URL playlist
+- **Facebook**: tải video/reel công khai ngay; video riêng tư, chỉ bạn bè hoặc trong nhóm thì dùng cookie đăng nhập (xem [Tải video Facebook](#tải-video-facebook))
 - Thanh tiến độ hiển thị bằng Rich
 - **Giao diện desktop** (Tkinter): dán nhiều URL, hàng đợi tải song song, tạm dừng/tiếp tục/hủy, tự thử lại khi lỗi
 - **Lịch sử tải** (SQLite): tự bỏ qua video đã tải, xem lại, mở thư mục chứa file
@@ -65,6 +66,13 @@ uv run youtube-vault audio URL --no-embed
 
 # Tải cả playlist
 uv run youtube-vault video "https://www.youtube.com/playlist?list=..."
+
+# Video / reel Facebook (công khai)
+uv run youtube-vault video "https://www.facebook.com/watch/?v=..."
+uv run youtube-vault audio "https://www.facebook.com/reel/..."
+
+# Video Facebook cần đăng nhập: dùng file cookie
+uv run youtube-vault video "https://www.facebook.com/..." --cookies D:\cookies.txt
 ```
 
 ### Tùy chọn
@@ -78,10 +86,30 @@ uv run youtube-vault video "https://www.youtube.com/playlist?list=..."
 | `audio` | `--embed` / `--no-embed` | bật | gắn tiêu đề, nghệ sĩ, ngày đăng vào file; với `mp3`/`m4a` gắn thêm thumbnail làm ảnh bìa |
 | `video`, `audio` | `--out`, `-o` | `~/Downloads/youtube-vault/` | đường dẫn thư mục |
 | `video`, `audio` | `--force` | tắt | tải lại kể cả khi đã có trong lịch sử |
+| `video`, `audio`, `info` | `--cookies` | `~/.youtube-vault/cookies.txt` nếu có | file cookies.txt để đăng nhập (xem [Tải video Facebook](#tải-video-facebook)) |
+| `video`, `audio`, `info` | `--cookies-from-browser` | không dùng | `chrome`, `edge`, `firefox`, `brave`, `opera`, `vivaldi`, `chromium` (ổn định nhất với `firefox`) |
 
 **Cách chọn độ phân giải:** lấy mức lớn nhất không vượt quá mức đã chọn (vd. chọn `1440` mà video chỉ có tới 1080p thì tải 1080p). Nếu video không có mức nào thấp như vậy thì lấy mức nhỏ nhất có sẵn. Độ phân giải tính theo cạnh ngắn của khung hình, nên video dọc (Shorts, 1080×1920) và phim màn ảnh rộng 21:9 (1920×804) đều được tính là 1080p. Cùng độ phân giải thì ưu tiên mp4 + m4a.
 
-File được đặt tên theo mẫu `%(title)s [%(id)s].%(ext)s`, ví dụ `Me at the zoo [jNQXAC9IVRw].mp4`.
+File được đặt tên theo mẫu `%(title).150B [%(id)s].%(ext)s`, ví dụ `Me at the zoo [jNQXAC9IVRw].mp4`. Tiêu đề dài (thường gặp ở Facebook, nơi tiêu đề là cả nội dung bài đăng) được cắt còn tối đa 150 byte.
+
+## Tải video Facebook
+
+**Video/reel công khai** tải được ngay, giống YouTube: `video`, `audio`, `info`, *Xem độ phân giải* và nút *Tải MP3* đều dùng được. Facebook thường chỉ có 2 mức chất lượng (`sd`, `hd`); chọn `--quality` nào thì cũng lấy mức gần nhất có sẵn.
+
+**Video riêng tư, chỉ bạn bè, trong nhóm** (và một số reel) cần bạn đăng nhập. Chương trình dùng cookie của trình duyệt đang đăng nhập Facebook:
+
+1. Mở Facebook trên trình duyệt và đăng nhập.
+2. Cài một tiện ích xuất cookie dạng `cookies.txt` (định dạng Netscape), ví dụ *Get cookies.txt LOCALLY*, rồi xuất cookie khi đang ở trang facebook.com.
+3. Lưu file thành `~/.youtube-vault/cookies.txt` (Windows: `C:\Users\<tên>\.youtube-vault\cookies.txt`). File này **được dùng tự động** cho CLI và được chọn sẵn trên GUI. Hoặc để file ở chỗ khác và dùng `--cookies <đường dẫn>`.
+
+Trên **Chrome/Edge (Windows)**, `--cookies-from-browser chrome` thường **không dùng được**: bản mới mã hóa cookie theo ứng dụng và khóa file cookie khi trình duyệt đang mở. Vì vậy nên dùng file `cookies.txt` như trên. Với **Firefox**, `--cookies-from-browser firefox` đọc trực tiếp được, không cần xuất file.
+
+Khi video cần đăng nhập mà chưa có cookie, hoặc không đọc được cookie từ trình duyệt, chương trình báo lỗi kèm gợi ý cách khắc phục.
+
+> ⚠️ **Bảo mật:** file `cookies.txt` chứa phiên đăng nhập Facebook của bạn, ai có file này có thể đăng nhập tài khoản của bạn. Không chia sẻ, không đưa lên Git/cloud. Khi cookie hết hạn (lỗi đăng nhập quay lại), hãy xuất lại file. Muốn ngừng dùng thì xóa file đi. Chương trình không lưu nội dung cookie vào lịch sử.
+
+Chỉ tải nội dung bạn có quyền sử dụng; tôn trọng bản quyền và điều khoản của Facebook.
 
 ## Giao diện desktop (GUI)
 
@@ -96,6 +124,7 @@ uv run youtube-vault gui
   - *Xem độ phân giải*: lấy danh sách độ phân giải mà video (link đầu tiên) thực sự có, kèm dung lượng ước tính, rồi hiện trong ô *Chất lượng* để chọn. Với playlist thì giữ danh sách chuẩn. Sau khi thêm vào hàng đợi, ô *Chất lượng* trở lại danh sách chuẩn.
   - *Bitrate audio* và *Gắn thông tin + ảnh bìa*: áp dụng cho mục audio (bitrate bị khóa khi chọn `wav`).
   - *Tải MP3*: bấm một lần là thêm các link vào hàng đợi dưới dạng audio mp3, dù đang chọn Video hay định dạng audio khác (dùng bitrate và tùy chọn ảnh bìa đang chọn).
+  - *Cookie đăng nhập*: *Không dùng*, *File cookies.txt* (bấm *Chọn…* để chọn file) hoặc lấy từ một trình duyệt. Cần cho video Facebook riêng tư/nhóm. Nếu đã có `~/.youtube-vault/cookies.txt` thì file này được chọn sẵn.
 - **Tab Hàng đợi:** xem tiến độ, tốc độ, thời gian còn lại của từng mục.
   - *Số luồng* (1–5): số video tải cùng lúc, đổi được ngay khi đang tải.
   - *Tạm dừng*: dừng tải nhưng giữ file `.part`; *Tiếp tục* sẽ tải nối tiếp từ chỗ dừng.

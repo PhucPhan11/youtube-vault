@@ -6,7 +6,14 @@ from pathlib import Path
 
 DEFAULT_OUTPUT_DIR: Path = Path.home() / "Downloads" / "youtube-vault"
 
-OUTPUT_TEMPLATE: str = "%(title)s [%(id)s].%(ext)s"
+# Tiêu đề bị cắt còn tối đa MAX_TITLE_BYTES byte (tiêu đề Facebook thường là cả bài đăng).
+MAX_TITLE_BYTES: int = 150
+OUTPUT_TEMPLATE: str = f"%(title).{MAX_TITLE_BYTES}B [%(id)s].%(ext)s"
+
+# Khi chỉ tải audio, file nguồn mang đuôi phụ này để không bao giờ trùng (rồi bị xóa)
+# với file video mp4 cùng tên; đuôi phụ được bỏ đi sau khi chuyển sang mp3/m4a...
+AUDIO_SOURCE_MARKER: str = ".yv-audio"
+AUDIO_SOURCE_TEMPLATE: str = f"%(title).{MAX_TITLE_BYTES}B [%(id)s]{AUDIO_SOURCE_MARKER}.%(ext)s"
 
 
 # Chọn định dạng video: luồng video + luồng audio tốt nhất, không có thì lấy file gộp sẵn.
@@ -51,6 +58,12 @@ RECORD_BEST_BITRATE: dict[str, str] = {"m4a": "256", "opus": "192"}
 # Dữ liệu ứng dụng (lịch sử tải)
 DATA_DIR: Path = Path.home() / ".youtube-vault"
 HISTORY_DB: Path = DATA_DIR / "history.db"
+
+# Cookie đăng nhập (cho video Facebook riêng tư/nhóm...). File này được dùng tự động nếu tồn tại.
+DEFAULT_COOKIES_FILE: Path = DATA_DIR / "cookies.txt"
+COOKIES_BROWSERS: tuple[str, ...] = (
+    "chrome", "edge", "firefox", "brave", "opera", "vivaldi", "chromium",
+)
 
 # Hàng đợi tải
 DEFAULT_MAX_WORKERS: int = 2

@@ -325,3 +325,15 @@ def test_audio_options_passed_to_downloader(fake, make_queue, tmp_path):
     assert call["fmt"] == "mp3"
     assert call["audio_quality"] == "320"
     assert call["embed_metadata"] is False
+
+
+def test_cookies_passed_to_downloader(fake, make_queue, tmp_path):
+    from youtube_vault.downloader import Cookies
+
+    fake.gate.set()
+    q = make_queue()
+    cookies = Cookies(browser="firefox")
+    video = q.add("fb1", output_dir=tmp_path, cookies=cookies)
+    audio = q.add("fb2", kind="audio", output_dir=tmp_path, cookies=cookies)
+    wait_for(lambda: video.status == audio.status == ItemStatus.COMPLETED)
+    assert [c["cookies"] for c in fake.calls] == [cookies, cookies]

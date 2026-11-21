@@ -258,7 +258,7 @@ def test_app_fetch_resolutions_fills_real_list(tk_root, monkeypatch, tmp_path, h
 
     fetched = []
 
-    def fake_get_info(url):
+    def fake_get_info(url, **kw):
         fetched.append(url)
         return _media_1440_720()
 
@@ -296,7 +296,7 @@ def test_app_fetch_resolutions_error_reenables_button(tk_root, monkeypatch, hist
     from youtube_vault import gui
     from youtube_vault.gui import App
 
-    def boom(url):
+    def boom(url, **kw):
         raise DownloadFailedError("Video unavailable")
 
     errors = []
@@ -402,4 +402,82 @@ def test_app_device_list_error_shown(tk_root, history):
               list_devices=broken)
     app.refresh_devices()
     _pump(tk_root, lambda: "thư viện ghi âm" in app.device_status_var.get())
+    app.close()
+
+
+# ------------------------------- cookie ------------------------------------ #
+def test_app_cookie_modes(tk_root, history, tmp_path):
+    from youtube_vault.downloader import Cookies
+    from youtube_vault.gui import COOKIES_FILE_LABEL, COOKIES_NONE_LABEL, App
+
+    app = App(tk_root, history=history, download_queue=DownloadQueue(), check_ffmpeg=False)
+    assert app.cookies_mode_var.get() == COOKIES_NONE_LABEL  # chưa có file mặc định
+    assert app.selected_cookies() is None
+    assert str(app.cookies_entry.cget("state")) == "disabled"
+
+    cookie = tmp_path / "c.txt"
+    cookie.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+    app.cookies_mode_var.set(COOKIES_FILE_LABEL)
+    app._on_cookies_mode_change()
+    assert str(app.cookies_entry.cget("state")) == "normal"
+    app.cookies_file_var.set(str(cookie))
+    assert app.selected_cookies() == Cookies(file=cookie)
+
+    app.cookies_file_var.set(str(tmp_path / "nope.txt"))
+    with pytest.raises(ValueError):
+        app.selected_cookies()
+
+    app.cookies_mode_var.set("Trình duyệt: firefox")
+    assert app.selected_cookies() == Cookies(browser="firefox")
+    app.close()
+
+
+def test_app_prefills_default_cookie_file(tk_root, history, monkeypatch, tmp_path):
+    from youtube_vault import config
+    from youtube_vault.downloader import Cookies
+    from youtube_vault.gui import COOKIES_FILE_LABEL, App
+
+    default = tmp_path / "default-cookies.txt"
+    default.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+    monkeypatch.setattr(config, "DEFAULT_COOKIES_FILE", default)
+    app = App(tk_root, history=history, download_queue=DownloadQueue(), check_ffmpeg=False)
+    assert app.cookies_mode_var.get() == COOKIES_FILE_LABEL
+    assert app.selected_cookies() == Cookies(file=default)
+    app.close()
+
+
+def test_app_adds_facebook_url_with_cookies(tk_root, history, monkeypatch, tmp_path):
+    from youtube_vault.downloader import Cookies
+    from youtube_vault.gui import App
+
+    calls: list[dict] = []
+    monkeypatch.setattr(downloader, "download_video",
+                        lambda url, **kw: calls.append({"url": url, **kw}) or [])
+    queue = DownloadQueue(history=history, retry_delays=(0,))
+    app = App(tk_root, history=history, download_queue=queue, check_ffmpeg=False)
+    app.cookies_mode_var.set("Trình duyệt: firefox")
+    app.url_text.insert("1.0", "https://www.facebook.com/watch/?v=123\n")
+    app.out_var.set(str(tmp_path))
+    items = app.add_from_input()
+    assert items[0].cookies == Cookies(browser="firefox")
+    _pump(tk_root, lambda: len(calls) == 1)
+    assert calls[0]["url"] == "https://www.facebook.com/watch/?v=123"
+    assert calls[0]["cookies"] == Cookies(browser="firefox")
+    app.close()
+
+
+def test_app_invalid_cookie_file_adds_nothing(tk_root, history, monkeypatch, tmp_path):
+    from youtube_vault import gui
+    from youtube_vault.gui import COOKIES_FILE_LABEL, App
+
+    warnings: list[str] = []
+    monkeypatch.setattr(gui.messagebox, "showwarning", lambda title, msg, **kw: warnings.append(msg))
+    app = App(tk_root, history=history, download_queue=DownloadQueue(), check_ffmpeg=False)
+    app.cookies_mode_var.set(COOKIES_FILE_LABEL)
+    app.cookies_file_var.set(str(tmp_path / "nope.txt"))
+    app.url_text.insert("1.0", "https://www.facebook.com/watch/?v=123\n")
+    assert app.add_from_input() == []
+    assert app.queue.items() == []
+    assert "Không tìm thấy file cookie" in warnings[0]
+    assert "facebook.com" in app.url_text.get("1.0", "end")  # giữ lại URL để sửa
     app.close()

@@ -4,9 +4,10 @@ import threading
 from pathlib import Path
 
 import pytest
+from yt_dlp.cookies import CookieLoadError
 from yt_dlp.utils import DownloadError
 
-from youtube_vault import downloader
+from youtube_vault import config, downloader
 from youtube_vault.config import (
     OUTPUT_TEMPLATE,
     QUALITY_PRESETS,
@@ -14,6 +15,7 @@ from youtube_vault.config import (
     VIDEO_FORMAT_PREFERENCE,
 )
 from youtube_vault.downloader import (
+    Cookies,
     DownloadCancelledError,
     DownloadFailedError,
     FFmpegNotFoundError,
@@ -25,11 +27,12 @@ from youtube_vault.downloader import (
     download_video,
     ffmpeg_install_instructions,
     format_sort_for,
+    friendly_error,
     get_info,
     list_resolutions,
     normalize_quality,
 )
-from youtube_vault.history import HistoryArchive, HistoryRecorder
+from youtube_vault.history import HistoryArchive, HistoryRecorder, make_archive_id
 
 
 # ---------------------------- download_video ------------------------------- #
@@ -248,7 +251,11 @@ def test_download_audio_uses_extract_audio_postprocessor(fake_ydl, ffmpeg_presen
     assert opts["format"] == "bestaudio/best"
     assert opts["postprocessors"][0]["key"] == "FFmpegExtractAudio"
     assert opts["postprocessors"][0]["preferredcodec"] == fmt
-    assert opts["outtmpl"] == str(tmp_path / OUTPUT_TEMPLATE)
+    # file nguồn có đuôi phụ, không trùng tên với file video mp4
+    assert opts["outtmpl"] == str(tmp_path / config.AUDIO_SOURCE_TEMPLATE)
+    pps = fake_ydl.instances[0].post_processors
+    assert any(isinstance(pp, downloader.StripAudioSourceMarker) and when == "post_process"
+               for pp, when in pps)
 
 
 @pytest.mark.parametrize(("bitrate", "expected"), [("best", "0"), ("320", "320"), ("128", "128")])
@@ -512,3 +519,163 @@ def test_progress_event_has_title(fake_ydl, ffmpeg_present, tmp_path):
     events: list[ProgressEvent] = []
     download_video("https://youtu.be/x", output_dir=tmp_path, progress_callback=events.append)
     assert events[0].title == "Hello"
+
+
+# --------------------------- Facebook / cookie ----------------------------- #
+
+FB_URL = "https://www.facebook.com/watch/?v=1234567890"
+
+
+def _cookie_file(tmp_path: Path) -> Path:
+    f = tmp_path / "cookies.txt"
+    f.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+    return f
+
+
+def test_cookies_resolve_none_without_default(tmp_path):
+    assert Cookies.resolve() is None  # conftest trỏ file mặc định vào tmp_path (chưa tồn tại)
+
+
+def test_cookies_resolve_uses_default_file_when_present():
+    default = Path(config.DEFAULT_COOKIES_FILE)
+    default.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+    assert Cookies.resolve() == Cookies(file=default)
+
+
+def test_cookies_resolve_explicit(tmp_path):
+    f = _cookie_file(tmp_path)
+    assert Cookies.resolve(file=f) == Cookies(file=f)
+    assert Cookies.resolve(browser="Firefox") == Cookies(browser="firefox")
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        ({"file": "khong-co.txt"}, "Không tìm thấy file cookie"),
+        ({"browser": "netscape"}, "Trình duyệt không được hỗ trợ"),
+        ({"file": "a.txt", "browser": "chrome"}, "Chỉ chọn một nguồn"),
+    ],
+)
+def test_cookies_resolve_rejects_invalid(kwargs, match):
+    with pytest.raises(ValueError, match=match):
+        Cookies.resolve(**kwargs)
+
+
+def test_video_passes_cookie_file(fake_ydl, ffmpeg_present, tmp_path):
+    f = _cookie_file(tmp_path)
+    download_video(FB_URL, output_dir=tmp_path, cookies=Cookies(file=f))
+    opts = fake_ydl.instances[0].opts
+    assert opts["cookiefile"] == str(f)
+    assert "cookiesfrombrowser" not in opts
+
+
+def test_audio_passes_cookies_from_browser(fake_ydl, ffmpeg_present, tmp_path):
+    download_audio(FB_URL, output_dir=tmp_path, cookies=Cookies(browser="firefox"))
+    opts = fake_ydl.instances[0].opts
+    assert opts["cookiesfrombrowser"] == ("firefox",)
+    assert "cookiefile" not in opts
+
+
+def test_no_cookies_by_default(fake_ydl, ffmpeg_present, tmp_path):
+    download_video(FB_URL, output_dir=tmp_path)
+    get_info(FB_URL)
+    for inst in fake_ydl.instances:
+        assert "cookiefile" not in inst.opts and "cookiesfrombrowser" not in inst.opts
+
+
+def test_get_info_passes_cookies(fake_ydl, tmp_path):
+    f = _cookie_file(tmp_path)
+    get_info(FB_URL, cookies=Cookies(file=f))
+    assert fake_ydl.instances[0].opts["cookiefile"] == str(f)
+
+
+def test_friendly_error_facebook_login():
+    msg = "ERROR: [facebook] 123: This video is only available for registered users. Use --cookies"
+    out = friendly_error(msg)
+    assert out.startswith(msg)
+    assert "cần đăng nhập" in out and "cookies.txt" in out
+
+
+def test_friendly_error_chrome_cookie_decrypt():
+    out = friendly_error("Failed to decrypt with DPAPI. See https://github.com/yt-dlp/yt-dlp/issues/10927 (cookie)")
+    assert "Chrome/Edge" in out and "--cookies" in out
+
+
+def test_friendly_error_leaves_other_messages():
+    assert friendly_error("ERROR: Video unavailable") == "ERROR: Video unavailable"
+    # lỗi đăng nhập của trang khác Facebook: giữ nguyên
+    assert friendly_error("ERROR: [vimeo] login required") == "ERROR: [vimeo] login required"
+
+
+def test_facebook_login_error_gets_hint(fake_ydl, ffmpeg_present, tmp_path):
+    fake_ydl.error = DownloadError("ERROR: [facebook] 123: Cannot parse data; please report this issue")
+    with pytest.raises(DownloadFailedError, match="cần đăng nhập"):
+        download_video(FB_URL, output_dir=tmp_path)
+
+
+def test_cookie_load_error_is_wrapped_with_cause(fake_ydl, ffmpeg_present, tmp_path):
+    try:
+        try:
+            raise PermissionError("Could not copy Chrome cookie database")
+        except PermissionError:
+            raise CookieLoadError("failed to load cookies")
+    except CookieLoadError as exc:
+        fake_ydl.error = exc
+    with pytest.raises(DownloadFailedError) as excinfo:
+        download_video(FB_URL, output_dir=tmp_path, cookies=Cookies(browser="chrome"))
+    msg = str(excinfo.value)
+    assert "Could not copy Chrome cookie database" in msg
+    assert "cookies.txt" in msg
+
+
+def test_cookie_load_error_in_get_info(fake_ydl):
+    try:
+        try:
+            raise OSError("Failed to decrypt with DPAPI")
+        except OSError:
+            raise CookieLoadError("failed to load cookies")
+    except CookieLoadError as exc:
+        fake_ydl.error = exc
+    with pytest.raises(DownloadFailedError, match="DPAPI"):
+        get_info(FB_URL, cookies=Cookies(browser="edge"))
+
+
+def test_facebook_history_key():
+    assert make_archive_id({"extractor_key": "Facebook", "id": "1234567890"}) == "facebook 1234567890"
+
+
+def test_title_is_capped_in_output_template():
+    assert f"%(title).{config.MAX_TITLE_BYTES}B" in OUTPUT_TEMPLATE
+    assert config.AUDIO_SOURCE_TEMPLATE.endswith(f"{config.AUDIO_SOURCE_MARKER}.%(ext)s")
+
+
+def test_long_title_is_truncated_by_real_ytdlp(tmp_path):
+    """Dùng YoutubeDL thật (không mạng) để kiểm tra mẫu tên file cắt tiêu đề dài."""
+    import yt_dlp
+
+    info = {"id": "123", "title": "Bài đăng Facebook rất dài " * 40, "ext": "mp4"}
+    with yt_dlp.YoutubeDL({"outtmpl": str(tmp_path / OUTPUT_TEMPLATE), "quiet": True}) as ydl:
+        name = Path(ydl.prepare_filename(info)).name
+    assert name.endswith(" [123].mp4")  # id và đuôi file luôn còn nguyên
+    title = name[: -len(" [123].mp4")]
+    assert len(title.encode("utf-8")) <= config.MAX_TITLE_BYTES
+
+
+@pytest.mark.parametrize("ext", ["mp3", "m4a"])
+def test_strip_audio_source_marker_renames(tmp_path, ext):
+    src = tmp_path / f"Clip [abc]{config.AUDIO_SOURCE_MARKER}.{ext}"
+    src.write_bytes(b"audio")
+    (tmp_path / f"Clip [abc].{ext}").write_bytes(b"old")  # file cũ cùng tên bị ghi đè
+    files, info = downloader.StripAudioSourceMarker().run({"filepath": str(src)})
+    target = tmp_path / f"Clip [abc].{ext}"
+    assert files == []
+    assert info["filepath"] == str(target)
+    assert target.read_bytes() == b"audio"
+    assert not src.exists()
+
+
+def test_strip_audio_source_marker_ignores_other_files(tmp_path):
+    video = tmp_path / "Clip [abc].mp4"
+    video.write_bytes(b"v")
+    _, info = downloader.StripAudioSourceMarker().run({"filepath": str(video)})
+    assert info["filepath"] == str(video) and video.exists()

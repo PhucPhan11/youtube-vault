@@ -16,11 +16,16 @@ from pathlib import Path
 from typing import Any
 
 import yt_dlp
-from yt_dlp.utils import DownloadCancelled, DownloadError
+from yt_dlp.postprocessor.common import PostProcessor
+from yt_dlp.utils import DownloadCancelled, YoutubeDLError
 
+from . import config
 from .history import History, HistoryArchive, HistoryRecord, HistoryRecorder
 from .config import (
     AUDIO_FORMATS,
+    AUDIO_SOURCE_MARKER,
+    AUDIO_SOURCE_TEMPLATE,
+    COOKIES_BROWSERS,
     AUDIO_QUALITIES,
     DEFAULT_AUDIO_FORMAT,
     DEFAULT_AUDIO_QUALITY,
@@ -35,6 +40,7 @@ from .config import (
 )
 
 __all__ = [
+    "Cookies",
     "DownloadCancelledError",
     "DownloadFailedError",
     "FFmpegNotFoundError",
@@ -48,6 +54,7 @@ __all__ = [
     "download_video",
     "ffmpeg_install_instructions",
     "format_sort_for",
+    "friendly_error",
     "get_info",
     "is_ffmpeg_available",
     "list_resolutions",
@@ -76,6 +83,90 @@ class DownloadFailedError(YoutubeVaultError):
 
 class DownloadCancelledError(YoutubeVaultError):
     """Việc tải bị dừng theo yêu cầu (qua ``cancel_event``)."""
+
+
+_LOGIN_HINT = (
+    "Gợi ý: video này cần đăng nhập. Xuất cookie của trình duyệt đang đăng nhập ra file "
+    "cookies.txt rồi lưu vào ~/.youtube-vault/cookies.txt hoặc dùng --cookies <file> (xem README)."
+)
+_BROWSER_COOKIE_HINT = (
+    "Gợi ý: không đọc được cookie trực tiếp từ trình duyệt (Chrome/Edge mới mã hóa cookie và khóa "
+    "file khi đang mở). Hãy xuất cookie ra file cookies.txt và dùng --cookies <file>, "
+    "hoặc dùng --cookies-from-browser firefox."
+)
+_LOGIN_PATTERNS = (
+    "login", "log in", "logged in", "registered users", "use --cookies",
+    "cookies-from-browser", "cannot parse data", "private video", "not available",
+)
+_BROWSER_COOKIE_PATTERNS = (
+    "dpapi", "could not copy chrome cookie database", "app-bound", "app bound",
+    "failed to decrypt", "could not find", "cookie database",
+)
+
+
+def friendly_error(message: str) -> str:
+    """Thêm gợi ý tiếng Việt cho lỗi đăng nhập/cookie thường gặp (Facebook, Chrome...)."""
+    low = message.lower()
+    if "cookie" in low and any(p in low for p in _BROWSER_COOKIE_PATTERNS):
+        return f"{message}\n{_BROWSER_COOKIE_HINT}"
+    if "facebook" in low and any(p in low for p in _LOGIN_PATTERNS):
+        return f"{message}\n{_LOGIN_HINT}"
+    return message
+
+
+def _error_message(exc: YoutubeDLError) -> str:
+    """Thông điệp lỗi của yt-dlp; lỗi nạp cookie giấu nguyên nhân thật trong ``__context__``."""
+    msg = str(exc)
+    cause = exc.__context__
+    if cause is not None and not isinstance(exc, DownloadCancelled) and str(cause) not in msg:
+        msg = f"{msg}: {cause}" if msg else str(cause)
+    return friendly_error(msg)
+
+
+# --------------------------------------------------------------------------- #
+# Cookie đăng nhập
+# --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class Cookies:
+    """Nguồn cookie đăng nhập: một file cookies.txt HOẶC tên trình duyệt."""
+
+    file: Path | None = None
+    browser: str | None = None
+
+    @classmethod
+    def resolve(
+        cls, file: Path | str | None = None, browser: str | None = None
+    ) -> Cookies | None:
+        """Chọn nguồn cookie: ``file``/``browser`` nếu có, không thì file mặc định nếu tồn tại.
+
+        Ném ``ValueError`` nếu file không tồn tại hoặc trình duyệt không được hỗ trợ.
+        """
+        if file and browser:
+            raise ValueError("Chỉ chọn một nguồn cookie: file cookies.txt hoặc trình duyệt.")
+        if browser:
+            name = browser.strip().lower()
+            if name not in COOKIES_BROWSERS:
+                raise ValueError(
+                    f"Trình duyệt không được hỗ trợ: {browser!r}. "
+                    f"Chọn một trong: {', '.join(COOKIES_BROWSERS)}"
+                )
+            return cls(browser=name)
+        if file:
+            path = Path(file).expanduser()
+            if not path.is_file():
+                raise ValueError(f"Không tìm thấy file cookie: {path}")
+            return cls(file=path)
+        default = Path(config.DEFAULT_COOKIES_FILE)  # đọc lúc gọi để test đổi được
+        return cls(file=default) if default.is_file() else None
+
+    def apply(self, opts: dict[str, Any]) -> None:
+        if self.file is not None:
+            opts["cookiefile"] = str(self.file)
+        elif self.browser is not None:
+            opts["cookiesfrombrowser"] = (self.browser,)
+
+    def describe(self) -> str:
+        return f"file {self.file}" if self.file is not None else f"trình duyệt {self.browser}"
 
 
 # --------------------------------------------------------------------------- #
@@ -241,19 +332,24 @@ def _parse_info(info: dict[str, Any]) -> MediaInfo:
     )
 
 
-def get_info(url: str) -> MediaInfo:
-    """Lấy tiêu đề, thời lượng, các định dạng có sẵn — không tải."""
-    opts = {
+def get_info(url: str, *, cookies: Cookies | None = None) -> MediaInfo:
+    """Lấy tiêu đề, thời lượng, các định dạng có sẵn — không tải.
+
+    ``cookies``: cookie đăng nhập (video Facebook riêng tư/nhóm...), xem ``Cookies.resolve``.
+    """
+    opts: dict[str, Any] = {
         "quiet": True,
         "no_warnings": True,
         "skip_download": True,
         "extract_flat": "in_playlist",
     }
+    if cookies is not None:
+        cookies.apply(opts)
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
-    except DownloadError as exc:
-        raise DownloadFailedError(str(exc)) from exc
+    except YoutubeDLError as exc:
+        raise DownloadFailedError(_error_message(exc)) from exc
     if not info:
         raise DownloadFailedError(f"Không lấy được thông tin cho: {url}")
     return _parse_info(info)
@@ -359,6 +455,7 @@ def _base_opts(
     output_dir: Path,
     progress_callback: ProgressCallback | None,
     cancel_event: threading.Event | None = None,
+    cookies: Cookies | None = None,
 ) -> dict[str, Any]:
     opts: dict[str, Any] = {
         "outtmpl": str(output_dir / OUTPUT_TEMPLATE),
@@ -367,6 +464,8 @@ def _base_opts(
         "noprogress": True,
         "noplaylist": False,
     }
+    if cookies is not None:
+        cookies.apply(opts)
     if progress_callback is not None or cancel_event is not None:
         opts["progress_hooks"] = [_make_hook(progress_callback, cancel_event)]
     return opts
@@ -383,6 +482,25 @@ def _iter_filepaths(info: dict[str, Any] | None) -> Iterator[Path]:
             yield Path(path)
 
 
+class StripAudioSourceMarker(PostProcessor):
+    """Đổi tên ``Tên [id].yv-audio.mp3`` -> ``Tên [id].mp3`` sau khi chuyển định dạng audio.
+
+    File nguồn của lượt tải audio mang đuôi phụ ``AUDIO_SOURCE_MARKER`` để yt-dlp không
+    dùng lại (rồi xóa mất) file video mp4 cùng tên; xem ``config.AUDIO_SOURCE_TEMPLATE``.
+    """
+
+    def run(self, info: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
+        path = info.get("filepath")
+        if path:
+            p = Path(path)
+            if p.stem.endswith(AUDIO_SOURCE_MARKER):
+                target = p.with_name(p.stem[: -len(AUDIO_SOURCE_MARKER)] + p.suffix)
+                if p.exists():
+                    p.replace(target)  # ghi đè file cũ cùng tên (vd. khi tải lại bằng --force)
+                info["filepath"] = str(target)
+        return [], info
+
+
 def _run(
     url: str,
     opts: dict[str, Any],
@@ -392,6 +510,7 @@ def _run(
     history: History | None,
     force: bool,
     cancel_event: threading.Event | None,
+    extra_postprocessors: list[PostProcessor] | None = None,
 ) -> list[Path]:
     if cancel_event is not None and cancel_event.is_set():
         raise DownloadCancelledError("Đã dừng theo yêu cầu")
@@ -412,15 +531,18 @@ def _run(
 
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
+            # chạy sau các postprocessor trong opts (chuyển audio, gắn thông tin/ảnh bìa)
+            for pp in extra_postprocessors or []:
+                ydl.add_post_processor(pp, when="post_process")
             if history is not None:
                 ydl.add_post_processor(HistoryRecorder(history, kind), when="after_move")
             info = ydl.extract_info(url, download=True)
     except DownloadCancelled as exc:
         raise DownloadCancelledError(str(exc)) from exc
-    except DownloadError as exc:
+    except YoutubeDLError as exc:  # DownloadError, CookieLoadError...
         if cancel_event is not None and cancel_event.is_set():
             raise DownloadCancelledError("Đã dừng theo yêu cầu") from exc
-        raise DownloadFailedError(str(exc)) from exc
+        raise DownloadFailedError(_error_message(exc)) from exc
     return list(dict.fromkeys(_iter_filepaths(info)))
 
 
@@ -433,14 +555,17 @@ def download_video(
     history: History | None = None,
     force: bool = False,
     cancel_event: threading.Event | None = None,
+    cookies: Cookies | None = None,
 ) -> list[Path]:
-    """Tải video mp4 (ghép video + audio). Hỗ trợ URL playlist.
+    """Tải video mp4 (ghép video + audio). Hỗ trợ URL playlist và mọi trang yt-dlp hỗ trợ
+    (YouTube, Facebook...).
 
     - ``quality``: ``"best"`` hoặc số dòng (``"1080"``, ``"720p"``, ``"804"``...). Lấy độ
       phân giải lớn nhất không vượt quá mức đó; nếu video không có thì lấy mức nhỏ nhất.
     - ``history``: nếu có, ghi lịch sử và bỏ qua video đã tải (trừ khi ``force``).
       Video bị bỏ qua được báo qua callback với ``status="skipped"``.
     - ``cancel_event``: set event này để dừng → ``DownloadCancelledError``.
+    - ``cookies``: cookie đăng nhập (video Facebook riêng tư/nhóm...), xem ``Cookies.resolve``.
 
     Trả về danh sách đường dẫn các file đã lưu.
     """
@@ -449,7 +574,7 @@ def download_video(
     out = Path(output_dir).expanduser()
     out.mkdir(parents=True, exist_ok=True)
 
-    opts = _base_opts(out, progress_callback, cancel_event)
+    opts = _base_opts(out, progress_callback, cancel_event, cookies)
     opts["format"] = VIDEO_FORMAT
     opts["format_sort"] = format_sort
     opts["merge_output_format"] = "mp4"
@@ -475,10 +600,11 @@ def download_audio(
     cancel_event: threading.Event | None = None,
     audio_quality: str = DEFAULT_AUDIO_QUALITY,
     embed_metadata: bool = DEFAULT_EMBED_METADATA,
+    cookies: Cookies | None = None,
 ) -> list[Path]:
     """Chỉ tải audio và chuyển sang ``fmt`` (mặc định mp3). Hỗ trợ URL playlist.
 
-    ``history``/``force``/``cancel_event``: như ``download_video``.
+    ``history``/``force``/``cancel_event``/``cookies``: như ``download_video``.
     ``audio_quality``: ``"best"`` (VBR cao nhất) hoặc bitrate kbps, xem ``AUDIO_QUALITIES``
     (không áp dụng cho wav).
     ``embed_metadata``: gắn tiêu đề/nghệ sĩ/ngày đăng vào file; với mp3/m4a gắn thêm
@@ -497,7 +623,10 @@ def download_audio(
     out = Path(output_dir).expanduser()
     out.mkdir(parents=True, exist_ok=True)
 
-    opts = _base_opts(out, progress_callback, cancel_event)
+    opts = _base_opts(out, progress_callback, cancel_event, cookies)
+    # Tên file nguồn khác tên video: nếu trang chỉ có file gộp (vd. Facebook), yt-dlp sẽ
+    # không coi file mp4 đã tải ở lượt "video" là nguồn rồi xóa nó sau khi tách audio.
+    opts["outtmpl"] = str(out / AUDIO_SOURCE_TEMPLATE)
     opts["format"] = "bestaudio/best"
     preferred = "0" if audio_quality == "best" else audio_quality
     postprocessors: list[dict[str, Any]] = [
@@ -517,4 +646,5 @@ def download_audio(
         history=history,
         force=force,
         cancel_event=cancel_event,
+        extra_postprocessors=[StripAudioSourceMarker()],
     )

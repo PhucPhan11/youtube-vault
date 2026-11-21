@@ -1,6 +1,6 @@
 # youtube-vault
 
-Download YouTube video/audio to disk. Thin wrapper around **yt-dlp** with two front-ends:
+Download YouTube / Facebook (any yt-dlp site) video/audio to disk. Thin wrapper around **yt-dlp** with two front-ends:
 a **Typer + Rich CLI** and a **Tkinter desktop GUI** (multi-threaded queue, pause/resume/cancel,
 auto-retry, SQLite download history). Python ≥ 3.11, managed with **uv**, built with hatchling,
 `src/` layout. The README is the user manual (in Vietnamese).
@@ -79,6 +79,16 @@ Key flows:
   runs off the Tk thread and reports back via `_ui_calls`. Recordings are not added to history.
   Tests inject `source_factory`/`popen` (`Recorder`) and `recorder_factory`/`list_devices` (`App`),
   so they never open a real sound device or ffmpeg.
+- **Sites & login cookies:** nothing is YouTube-specific; URLs go straight to yt-dlp (Facebook works).
+  `downloader.Cookies` (file or browser) is resolved by the front-ends via `Cookies.resolve`
+  (explicit > `config.DEFAULT_COOKIES_FILE` if it exists) and passed as `cookies=` to `get_info`,
+  `download_video`, `download_audio` and `DownloadQueue.add`; `Cookies.apply` sets `cookiefile` /
+  `cookiesfrombrowser`. yt-dlp errors (incl. `CookieLoadError`, which is not a `DownloadError`) are
+  caught as `YoutubeDLError` and passed through `friendly_error` for Vietnamese login hints.
+- **Filenames:** `OUTPUT_TEMPLATE` caps the title (`%(title).150B`) — don't use yt-dlp
+  `trim_file_name`, it trims the whole path. Audio downloads use `AUDIO_SOURCE_TEMPLATE`
+  (`….yv-audio.%(ext)s`) so yt-dlp never reuses and then deletes a same-named video mp4 (sites with
+  only muxed formats, e.g. Facebook); `StripAudioSourceMarker` renames the result back to `… [id].mp3`.
 - **Errors:** the core raises `YoutubeVaultError` subclasses (`FFmpegNotFoundError`,
   `DownloadFailedError`, `DownloadCancelledError`). The CLI turns them into Rich messages and
   `typer.Exit(1)` (`cli._run_download`). The GUI shows them per item.
@@ -92,8 +102,9 @@ Key flows:
     progress hooks and `after_move` postprocessors.
   - `ffmpeg_present` / `ffmpeg_missing`: patch `shutil.which`.
   - `history`: a `History` on a temp DB.
-  - Autouse `_isolated_history_db` redirects `config.HISTORY_DB` to `tmp_path`, so tests never
-    touch `~/.youtube-vault`. Keep it that way. Don't read `HISTORY_DB` at import time.
+  - Autouse `_isolated_history_db` redirects `config.HISTORY_DB` and `config.DEFAULT_COOKIES_FILE`
+    to `tmp_path`, so tests never touch `~/.youtube-vault` (history or the user's login cookies).
+    Keep it that way. Don't read either at import time.
 - CLI tests use `typer.testing.CliRunner` and monkeypatch `downloader.*` functions.
 - Queue tests monkeypatch `downloader.download_video/download_audio` and poll with
   `wait_for(cond)` (`tests/test_download_queue.py`). Build queues with that file's `make_queue()`

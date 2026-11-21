@@ -28,6 +28,7 @@ from rich.table import Table
 from . import downloader, recorder
 from .config import (
     AUDIO_QUALITIES,
+    COOKIES_BROWSERS,
     DEFAULT_AUDIO_QUALITY,
     DEFAULT_EMBED_METADATA,
     DEFAULT_OUTPUT_DIR,
@@ -35,6 +36,7 @@ from .config import (
     QUALITY_PRESETS,
 )
 from .downloader import (
+    Cookies,
     FFmpegNotFoundError,
     MediaInfo,
     ProgressEvent,
@@ -44,7 +46,7 @@ from .history import History
 from .platform_utils import open_folder
 
 app = typer.Typer(
-    help="youtube-vault — tải video/audio YouTube về máy (dùng yt-dlp).",
+    help="youtube-vault — tải video/audio YouTube, Facebook… về máy (dùng yt-dlp).",
     no_args_is_help=True,
     add_completion=False,
 )
@@ -75,6 +77,43 @@ ForceOption = Annotated[
     bool,
     typer.Option("--force", help="Tải lại kể cả khi đã có trong lịch sử."),
 ]
+UrlArgument = Annotated[
+    str, typer.Argument(help="URL video hoặc playlist (YouTube, Facebook, và các trang yt-dlp hỗ trợ).")
+]
+
+# Trình duyệt lấy cookie, lấy từ config.
+CookieBrowser = Enum(  # type: ignore[misc]
+    "CookieBrowser", {b: b for b in COOKIES_BROWSERS}, type=str
+)
+CookiesOption = Annotated[
+    Path | None,
+    typer.Option(
+        "--cookies",
+        exists=True,
+        dir_okay=False,
+        help=(
+            "File cookies.txt để đăng nhập (vd. video Facebook riêng tư/nhóm). "
+            "Mặc định dùng ~/.youtube-vault/cookies.txt nếu có."
+        ),
+    ),
+]
+BrowserCookiesOption = Annotated[
+    CookieBrowser | None,
+    typer.Option(
+        "--cookies-from-browser",
+        help="Lấy cookie đăng nhập trực tiếp từ trình duyệt (ổn định nhất với firefox).",
+    ),
+]
+
+
+def _resolve_cookies(file: Path | None, browser: Enum | None) -> Cookies | None:
+    try:
+        cookies = Cookies.resolve(file, browser.value if browser is not None else None)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from None
+    if cookies is not None and file is None and browser is None:
+        console.print(f"[dim]Dùng cookie đăng nhập từ {cookies.file}[/]")
+    return cookies
 
 
 def _validate_quality(value: str) -> str:
@@ -177,11 +216,11 @@ def _exit_ffmpeg_missing(instructions: str) -> NoReturn:
     raise typer.Exit(1)
 
 
-def _choose_quality(url: str) -> str:
+def _choose_quality(url: str, cookies: Cookies | None = None) -> str:
     """Lấy các độ phân giải video thực sự có, cho người dùng chọn; trả về giá trị chất lượng."""
     try:
         with console.status("Đang lấy danh sách độ phân giải..."):
-            media = downloader.get_info(url)
+            media = downloader.get_info(url, cookies=cookies)
     except YoutubeVaultError as exc:
         err_console.print(f"[bold red]Lỗi:[/] {exc}")
         raise typer.Exit(1) from None
@@ -236,17 +275,20 @@ def _run_download(action: Callable[[Callable[[ProgressEvent], None]], list[Path]
 # --------------------------------------------------------------------------- #
 @app.command()
 def video(
-    url: Annotated[str, typer.Argument(help="URL video hoặc playlist YouTube.")],
+    url: UrlArgument,
     quality: QualityOption = DEFAULT_QUALITY,
     choose: ChooseOption = False,
     out: OutOption = DEFAULT_OUTPUT_DIR,
     force: ForceOption = False,
+    cookies_file: CookiesOption = None,
+    cookies_browser: BrowserCookiesOption = None,
 ) -> None:
     """Tải video mp4 (ghép video + audio)."""
+    cookies = _resolve_cookies(cookies_file, cookies_browser)
     if choose:
         if not downloader.is_ffmpeg_available():
             _exit_ffmpeg_missing(downloader.ffmpeg_install_instructions())
-        quality = _choose_quality(url)
+        quality = _choose_quality(url, cookies)
     hist = _open_history()
     _run_download(
         lambda cb: downloader.download_video(
@@ -256,13 +298,14 @@ def video(
             progress_callback=cb,
             history=hist,
             force=force,
+            cookies=cookies,
         )
     )
 
 
 @app.command()
 def audio(
-    url: Annotated[str, typer.Argument(help="URL video hoặc playlist YouTube.")],
+    url: UrlArgument,
     fmt: Annotated[
         AudioFormat, typer.Option("--format", "-f", help="Định dạng audio.")
     ] = AudioFormat.mp3,
@@ -283,8 +326,11 @@ def audio(
     ] = DEFAULT_EMBED_METADATA,
     out: OutOption = DEFAULT_OUTPUT_DIR,
     force: ForceOption = False,
+    cookies_file: CookiesOption = None,
+    cookies_browser: BrowserCookiesOption = None,
 ) -> None:
     """Chỉ tải audio (mặc định mp3)."""
+    cookies = _resolve_cookies(cookies_file, cookies_browser)
     hist = _open_history()
     _run_download(
         lambda cb: downloader.download_audio(
@@ -296,6 +342,7 @@ def audio(
             force=force,
             audio_quality=bitrate.value,
             embed_metadata=embed,
+            cookies=cookies,
         )
     )
 
@@ -473,12 +520,15 @@ def history_open(
 
 @app.command()
 def info(
-    url: Annotated[str, typer.Argument(help="URL video hoặc playlist YouTube.")],
+    url: UrlArgument,
+    cookies_file: CookiesOption = None,
+    cookies_browser: BrowserCookiesOption = None,
 ) -> None:
     """Xem thông tin video/playlist (không tải)."""
+    cookies = _resolve_cookies(cookies_file, cookies_browser)
     try:
         with console.status("Đang lấy thông tin..."):
-            media = downloader.get_info(url)
+            media = downloader.get_info(url, cookies=cookies)
     except YoutubeVaultError as exc:
         err_console.print(f"[bold red]Lỗi:[/] {exc}")
         raise typer.Exit(1) from None

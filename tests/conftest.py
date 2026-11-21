@@ -63,6 +63,8 @@ class FakeYoutubeDL:
 def _isolated_history_db(tmp_path, monkeypatch: pytest.MonkeyPatch):
     """Không bao giờ đụng tới ~/.youtube-vault thật khi chạy test."""
     monkeypatch.setattr(config, "HISTORY_DB", tmp_path / "default-history.db")
+    # Không bao giờ đọc cookie đăng nhập thật của người dùng.
+    monkeypatch.setattr(config, "DEFAULT_COOKIES_FILE", tmp_path / "default-cookies.txt")
 
 
 @pytest.fixture

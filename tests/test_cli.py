@@ -25,7 +25,7 @@ def test_info_prints_title(monkeypatch):
     monkeypatch.setattr(
         downloader,
         "get_info",
-        lambda url: MediaInfo(id="jNQXAC9IVRw", title="Me at the zoo", duration=19, uploader="jawed"),
+        lambda url, **kw: MediaInfo(id="jNQXAC9IVRw", title="Me at the zoo", duration=19, uploader="jawed"),
     )
     result = runner.invoke(app, ["info", "https://www.youtube.com/watch?v=jNQXAC9IVRw"])
     assert result.exit_code == 0
@@ -40,7 +40,7 @@ def test_info_playlist(monkeypatch):
         is_playlist=True,
         entries=[MediaInfo(id="a", title="Clip A", duration=3725)],
     )
-    monkeypatch.setattr(downloader, "get_info", lambda url: media)
+    monkeypatch.setattr(downloader, "get_info", lambda url, **kw: media)
     result = runner.invoke(app, ["info", "https://youtube.com/playlist?list=PL"])
     assert result.exit_code == 0
     assert "Clip A" in result.output
@@ -48,7 +48,7 @@ def test_info_playlist(monkeypatch):
 
 
 def test_info_error_exits_cleanly(monkeypatch):
-    def boom(url):
+    def boom(url, **kw):
         raise DownloadFailedError("Video unavailable")
 
     monkeypatch.setattr(downloader, "get_info", boom)
@@ -112,7 +112,7 @@ def test_video_choose_prompts_and_uses_selection(monkeypatch, ffmpeg_present, tm
         captured["quality"] = quality
         return []
 
-    monkeypatch.setattr(downloader, "get_info", lambda url: _media_with_resolutions())
+    monkeypatch.setattr(downloader, "get_info", lambda url, **kw: _media_with_resolutions())
     monkeypatch.setattr(downloader, "download_video", fake_download)
     result = runner.invoke(
         app, ["video", "https://youtu.be/x", "--choose", "-q", "1080", "-o", str(tmp_path)],
@@ -125,7 +125,7 @@ def test_video_choose_prompts_and_uses_selection(monkeypatch, ffmpeg_present, tm
 
 def test_video_choose_default_is_highest(monkeypatch, ffmpeg_present, tmp_path):
     captured = {}
-    monkeypatch.setattr(downloader, "get_info", lambda url: _media_with_resolutions())
+    monkeypatch.setattr(downloader, "get_info", lambda url, **kw: _media_with_resolutions())
     monkeypatch.setattr(
         downloader, "download_video",
         lambda url, quality, output_dir, progress_callback, **kw: captured.update(q=quality) or [],
@@ -138,7 +138,7 @@ def test_video_choose_default_is_highest(monkeypatch, ffmpeg_present, tmp_path):
 def test_video_choose_rejects_playlist(monkeypatch, ffmpeg_present, tmp_path):
     called = []
     monkeypatch.setattr(
-        downloader, "get_info", lambda url: MediaInfo(id="PL", title="L", is_playlist=True)
+        downloader, "get_info", lambda url, **kw: MediaInfo(id="PL", title="L", is_playlist=True)
     )
     monkeypatch.setattr(downloader, "download_video", lambda *a, **k: called.append(1) or [])
     result = runner.invoke(app, ["video", "https://youtube.com/playlist?list=PL", "--choose"])
@@ -149,7 +149,7 @@ def test_video_choose_rejects_playlist(monkeypatch, ffmpeg_present, tmp_path):
 
 def test_video_choose_without_formats_uses_best(monkeypatch, ffmpeg_present, tmp_path):
     captured = {}
-    monkeypatch.setattr(downloader, "get_info", lambda url: MediaInfo(id="x", title="t"))
+    monkeypatch.setattr(downloader, "get_info", lambda url, **kw: MediaInfo(id="x", title="t"))
     monkeypatch.setattr(
         downloader, "download_video",
         lambda url, quality, output_dir, progress_callback, **kw: captured.update(q=quality) or [],
@@ -161,7 +161,7 @@ def test_video_choose_without_formats_uses_best(monkeypatch, ffmpeg_present, tmp
 
 def test_video_choose_without_ffmpeg_fails_before_fetching(monkeypatch, ffmpeg_missing):
     fetched = []
-    monkeypatch.setattr(downloader, "get_info", lambda url: fetched.append(url))
+    monkeypatch.setattr(downloader, "get_info", lambda url, **kw: fetched.append(url))
     result = runner.invoke(app, ["video", "https://youtu.be/x", "--choose"])
     assert result.exit_code == 1
     assert "ffmpeg" in result.output.lower()
@@ -169,7 +169,7 @@ def test_video_choose_without_ffmpeg_fails_before_fetching(monkeypatch, ffmpeg_m
 
 
 def test_info_lists_resolutions(monkeypatch):
-    monkeypatch.setattr(downloader, "get_info", lambda url: _media_with_resolutions())
+    monkeypatch.setattr(downloader, "get_info", lambda url, **kw: _media_with_resolutions())
     result = runner.invoke(app, ["info", "https://youtu.be/x"])
     assert result.exit_code == 0
     assert "Độ phân giải có sẵn" in result.output
@@ -416,3 +416,82 @@ def test_record_without_ffmpeg_shows_instructions(monkeypatch, tmp_path):
     result = runner.invoke(app, ["record", "-o", str(tmp_path)])
     assert result.exit_code == 1
     assert "ffmpeg" in result.output
+
+
+# ------------------------------ Facebook/cookie ---------------------------- #
+FB_URL = "https://www.facebook.com/reel/1234567890"
+
+
+def _capture(monkeypatch, name):
+    captured: dict = {}
+
+    def fake(url, *args, **kwargs):
+        captured.update(url=url, **kwargs)
+        return [] if name != "get_info" else MediaInfo(id="1", title="FB video")
+
+    monkeypatch.setattr(downloader, name, fake)
+    return captured
+
+
+def test_video_facebook_with_cookie_file(monkeypatch, tmp_path):
+    captured = _capture(monkeypatch, "download_video")
+    cookie = tmp_path / "c.txt"
+    cookie.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+    result = runner.invoke(app, ["video", FB_URL, "--cookies", str(cookie), "-o", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert captured["url"] == FB_URL
+    assert captured["cookies"] == downloader.Cookies(file=cookie)
+
+
+def test_audio_cookies_from_browser(monkeypatch, tmp_path):
+    captured = _capture(monkeypatch, "download_audio")
+    result = runner.invoke(
+        app, ["audio", FB_URL, "--cookies-from-browser", "firefox", "-o", str(tmp_path)]
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["cookies"] == downloader.Cookies(browser="firefox")
+
+
+def test_default_cookie_file_is_used_and_announced(monkeypatch, tmp_path):
+    from youtube_vault import config
+
+    default = tmp_path / "default-cookies.txt"
+    default.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+    monkeypatch.setattr(config, "DEFAULT_COOKIES_FILE", default)
+    captured = _capture(monkeypatch, "download_video")
+    result = runner.invoke(app, ["video", FB_URL, "-o", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert captured["cookies"] == downloader.Cookies(file=default)
+    assert "Dùng cookie đăng nhập" in result.output
+
+
+def test_no_cookies_by_default(monkeypatch, tmp_path):
+    captured = _capture(monkeypatch, "download_video")
+    result = runner.invoke(app, ["video", FB_URL, "-o", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert captured["cookies"] is None
+
+
+def test_missing_cookie_file_is_rejected(monkeypatch, tmp_path):
+    _capture(monkeypatch, "download_video")
+    result = runner.invoke(app, ["video", FB_URL, "--cookies", str(tmp_path / "nope.txt")])
+    assert result.exit_code != 0
+
+
+def test_both_cookie_sources_rejected(monkeypatch, tmp_path):
+    _capture(monkeypatch, "download_video")
+    cookie = tmp_path / "c.txt"
+    cookie.write_text("", encoding="utf-8")
+    result = runner.invoke(
+        app, ["video", FB_URL, "--cookies", str(cookie), "--cookies-from-browser", "chrome"]
+    )
+    assert result.exit_code != 0
+    assert "Chỉ chọn một nguồn" in result.output
+
+
+def test_info_passes_cookies(monkeypatch):
+    captured = _capture(monkeypatch, "get_info")
+    result = runner.invoke(app, ["info", FB_URL, "--cookies-from-browser", "edge"])
+    assert result.exit_code == 0, result.output
+    assert captured["cookies"] == downloader.Cookies(browser="edge")
+    assert "FB video" in result.output

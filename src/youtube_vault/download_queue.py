@@ -33,6 +33,7 @@ from .config import (
     RETRY_DELAYS,
 )
 from .downloader import (
+    Cookies,
     DownloadCancelledError,
     DownloadFailedError,
     FFmpegNotFoundError,
@@ -69,6 +70,7 @@ class DownloadItem:
     audio_format: str = DEFAULT_AUDIO_FORMAT
     audio_quality: str = DEFAULT_AUDIO_QUALITY  # bitrate: "best" hoặc kbps
     embed_metadata: bool = DEFAULT_EMBED_METADATA
+    cookies: Cookies | None = None  # cookie đăng nhập (Facebook riêng tư/nhóm...)
     output_dir: Path = DEFAULT_OUTPUT_DIR
     force: bool = False
     status: ItemStatus = ItemStatus.QUEUED
@@ -144,6 +146,7 @@ class DownloadQueue:
         force: bool = False,
         audio_quality: str = DEFAULT_AUDIO_QUALITY,
         embed_metadata: bool = DEFAULT_EMBED_METADATA,
+        cookies: Cookies | None = None,
     ) -> DownloadItem:
         if kind not in ("video", "audio"):
             raise ValueError(f"Loại không hợp lệ: {kind!r}")
@@ -155,6 +158,7 @@ class DownloadQueue:
             audio_format=audio_format,
             audio_quality=audio_quality,
             embed_metadata=embed_metadata,
+            cookies=cookies,
             output_dir=Path(output_dir).expanduser(),
             force=force,
         )
@@ -314,6 +318,7 @@ class DownloadQueue:
                         cancel_event=item._cancel_event,
                         audio_quality=item.audio_quality,
                         embed_metadata=item.embed_metadata,
+                        cookies=item.cookies,
                     )
                 else:
                     files = downloader.download_video(
@@ -324,6 +329,7 @@ class DownloadQueue:
                         history=self.history,
                         force=item.force,
                         cancel_event=item._cancel_event,
+                        cookies=item.cookies,
                     )
             except DownloadCancelledError:
                 return self._stop_status(item)
