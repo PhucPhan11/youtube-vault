@@ -40,6 +40,14 @@ DEFAULT_EMBED_METADATA: bool = True
 # Định dạng mà ffmpeg nhúng được ảnh bìa (không cần cài thêm mutagen/AtomicParsley).
 EMBED_THUMBNAIL_FORMATS: tuple[str, ...] = ("mp3", "m4a")
 
+# Ghi âm âm thanh đang phát trên máy (loopback của loa)
+RECORD_SAMPLE_RATE: int = 48_000
+RECORD_CHANNELS: int = 2
+RECORD_BLOCK_SECONDS: float = 0.1  # mỗi lần đọc 100 ms
+RECORD_FILENAME: str = "Ghi âm %Y-%m-%d %H-%M-%S"  # strftime, thêm .<đuôi>
+# Bitrate (kbps) khi chọn "best" cho các định dạng không có chế độ VBR qua ffmpeg.
+RECORD_BEST_BITRATE: dict[str, str] = {"m4a": "256", "opus": "192"}
+
 # Dữ liệu ứng dụng (lịch sử tải)
 DATA_DIR: Path = Path.home() / ".youtube-vault"
 HISTORY_DB: Path = DATA_DIR / "history.db"

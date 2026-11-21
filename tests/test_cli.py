@@ -6,7 +6,7 @@ import pytest
 from typer.testing import CliRunner
 
 from youtube_vault import cli as cli_module
-from youtube_vault import downloader
+from youtube_vault import downloader, recorder
 from youtube_vault.cli import app
 from youtube_vault.downloader import DownloadFailedError, FormatInfo, MediaInfo, ProgressEvent
 from youtube_vault.history import History
@@ -17,7 +17,7 @@ runner = CliRunner()
 def test_help_lists_all_commands():
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0
-    for cmd in ("video", "audio", "info", "history", "gui"):
+    for cmd in ("video", "audio", "record", "info", "history", "gui"):
         assert cmd in result.output
 
 
@@ -331,3 +331,88 @@ def test_force_flag_is_passed(monkeypatch, tmp_path):
     result = runner.invoke(app, ["audio", "https://youtu.be/x", "--force", "-o", str(tmp_path)])
     assert result.exit_code == 0, result.output
     assert captured["force"] is True
+
+
+# -------------------------------- record ----------------------------------- #
+class FakeRecorder:
+    instances: list[FakeRecorder] = []
+
+    def __init__(self, output_dir, fmt, audio_quality, device, start_error=None):
+        self.args = (Path(output_dir), fmt, audio_quality, device)
+        self.path = Path(output_dir) / f"Ghi âm test.{fmt}"
+        self.level = 0.5
+        self._elapsed = 0.0
+        self.stopped = False
+        self.start_error = start_error
+        FakeRecorder.instances.append(self)
+
+    def start(self):
+        if self.start_error is not None:
+            raise self.start_error
+        return self.path
+
+    @property
+    def elapsed(self):
+        self._elapsed += 0.5  # mỗi lần đọc giả như đã ghi thêm nửa giây
+        return self._elapsed
+
+    @property
+    def is_recording(self):
+        return not self.stopped
+
+    def stop(self):
+        self.stopped = True
+        return self.path
+
+
+@pytest.fixture
+def fake_recorder(monkeypatch):
+    FakeRecorder.instances = []
+    monkeypatch.setattr(recorder, "Recorder", FakeRecorder)
+    return FakeRecorder
+
+
+def test_record_with_duration_saves_file(fake_recorder, tmp_path):
+    result = runner.invoke(
+        app, ["record", "-t", "1", "-f", "m4a", "-b", "192", "-d", "Loa A", "-o", str(tmp_path)]
+    )
+    assert result.exit_code == 0, result.output
+    rec = fake_recorder.instances[0]
+    assert rec.args == (tmp_path, "m4a", "192", "Loa A")
+    assert rec.stopped
+    assert "Đã lưu" in result.output
+    assert "Ghi âm test.m4a" in result.output.replace("\n", "")
+
+
+def test_record_defaults(fake_recorder, tmp_path):
+    result = runner.invoke(app, ["record", "-t", "0.5", "-o", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert fake_recorder.instances[0].args == (tmp_path, "mp3", "best", None)
+
+
+def test_record_list_devices(monkeypatch):
+    monkeypatch.setattr(recorder, "list_output_devices", lambda: ["Loa A", "Tai nghe B"])
+    result = runner.invoke(app, ["record", "--list-devices"])
+    assert result.exit_code == 0, result.output
+    assert "Loa A" in result.output and "(mặc định)" in result.output
+    assert "Tai nghe B" in result.output
+
+
+def test_record_unavailable_exits_1(monkeypatch, tmp_path):
+    def broken(*args, **kwargs):
+        return FakeRecorder(*args, start_error=recorder.RecorderUnavailableError("Không có loa"))
+
+    monkeypatch.setattr(recorder, "Recorder", broken)
+    result = runner.invoke(app, ["record", "-o", str(tmp_path)])
+    assert result.exit_code == 1
+    assert "Không có loa" in result.output
+
+
+def test_record_without_ffmpeg_shows_instructions(monkeypatch, tmp_path):
+    def broken(*args, **kwargs):
+        return FakeRecorder(*args, start_error=downloader.FFmpegNotFoundError())
+
+    monkeypatch.setattr(recorder, "Recorder", broken)
+    result = runner.invoke(app, ["record", "-o", str(tmp_path)])
+    assert result.exit_code == 1
+    assert "ffmpeg" in result.output

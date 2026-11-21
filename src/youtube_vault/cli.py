@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import sqlite3
+import time
 from collections.abc import Callable
 from enum import Enum
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, NoReturn
 
 import typer
 from rich.console import Console
+from rich.live import Live
 from rich.panel import Panel
 from rich.progress import (
     BarColumn,
@@ -23,7 +25,7 @@ from rich.progress import (
 from rich.prompt import IntPrompt
 from rich.table import Table
 
-from . import downloader
+from . import downloader, recorder
 from .config import (
     AUDIO_QUALITIES,
     DEFAULT_AUDIO_QUALITY,
@@ -170,7 +172,7 @@ def _progress_callback(progress: Progress) -> Callable[[ProgressEvent], None]:
     return callback
 
 
-def _exit_ffmpeg_missing(instructions: str) -> None:
+def _exit_ffmpeg_missing(instructions: str) -> NoReturn:
     err_console.print(Panel(instructions, title="[bold red]Chưa cài ffmpeg", border_style="red"))
     raise typer.Exit(1)
 
@@ -296,6 +298,84 @@ def audio(
             embed_metadata=embed,
         )
     )
+
+
+def _level_bar(level: float, width: int = 10) -> str:
+    filled = max(0, min(width, round(level * width)))
+    return "▮" * filled + "▯" * (width - filled)
+
+
+def _fail(exc: YoutubeVaultError) -> NoReturn:
+    if isinstance(exc, FFmpegNotFoundError):
+        _exit_ffmpeg_missing(exc.instructions)
+    err_console.print(f"[bold red]Lỗi:[/] {exc}")
+    raise typer.Exit(1)
+
+
+@app.command()
+def record(
+    out: OutOption = DEFAULT_OUTPUT_DIR,
+    fmt: Annotated[
+        AudioFormat, typer.Option("--format", "-f", help="Định dạng file ghi âm.")
+    ] = AudioFormat.mp3,
+    bitrate: Annotated[
+        AudioQuality,
+        typer.Option(
+            "--bitrate",
+            "-b",
+            help="Bitrate (kbps); 'best' = chất lượng cao nhất. Không áp dụng cho wav.",
+        ),
+    ] = AudioQuality(DEFAULT_AUDIO_QUALITY),
+    device: Annotated[
+        str | None,
+        typer.Option(
+            "--device", "-d", help="Tên loa cần ghi (xem --list-devices). Mặc định: loa hệ thống."
+        ),
+    ] = None,
+    duration: Annotated[
+        float | None,
+        typer.Option(
+            "--duration",
+            "-t",
+            min=0.1,
+            help="Tự dừng sau số giây này. Không đặt thì ghi tới khi bấm Ctrl+C.",
+        ),
+    ] = None,
+    list_devices: Annotated[
+        bool, typer.Option("--list-devices", help="Liệt kê các loa ghi được rồi thoát.")
+    ] = False,
+) -> None:
+    """Ghi âm âm thanh đang phát trên máy (vd. trình duyệt). Bấm Ctrl+C để dừng và lưu."""
+    if list_devices:
+        try:
+            names = recorder.list_output_devices()
+        except YoutubeVaultError as exc:
+            _fail(exc)
+        for i, name in enumerate(names):
+            console.print(f"  • {name}" + (" [dim](mặc định)[/]" if i == 0 else ""))
+        return
+
+    rec = recorder.Recorder(out, fmt.value, bitrate.value, device)
+    try:
+        rec.start()
+    except YoutubeVaultError as exc:
+        _fail(exc)
+    console.print(f"Đang ghi vào [bold]{rec.path}[/] — bấm Ctrl+C để dừng.")
+    try:
+        with Live(console=console, refresh_per_second=8, transient=True) as live:
+            while rec.is_recording and (duration is None or rec.elapsed < duration):
+                live.update(
+                    f"[red]●[/] Đang ghi {_format_duration(rec.elapsed)} {_level_bar(rec.level)}"
+                )
+                time.sleep(0.1)
+    except KeyboardInterrupt:
+        pass
+    with console.status("Đang lưu file..."):
+        try:
+            path = rec.stop()
+        except YoutubeVaultError as exc:
+            _fail(exc)
+    console.print(f"[bold green]Đã lưu ({_format_duration(rec.elapsed)}):[/] {path}")
 
 
 @app.command()

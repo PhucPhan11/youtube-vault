@@ -17,7 +17,8 @@ stay English.
 uv sync                                   # create/refresh .venv (incl. dev group: pytest)
 uv run pytest                             # full suite (~5 s, fully offline)
 uv run pytest tests/test_download_queue.py -k pause -q
-uv run youtube-vault --help               # commands: video, audio, info, history, gui
+uv run youtube-vault --help               # commands: video, audio, record, info, history, gui
+uv run youtube-vault record -t 3 -o <dir> # records real system audio (needs a sound device)
 uv run youtube-vault info <url>           # metadata only, no ffmpeg needed (hits network)
 uv run youtube-vault video <url> -q 720 -o <dir>
 uv run youtube-vault audio <url> -f m4a -o <dir>
@@ -40,12 +41,13 @@ src/youtube_vault/
   downloader.py      yt-dlp wrapper: get_info, download_video, download_audio, ProgressEvent, errors
   history.py         SQLite History + yt-dlp glue (HistoryArchive, HistoryRecorder)
   download_queue.py  DownloadQueue: bounded worker threads, pause/resume/cancel, retries
+  recorder.py        Recorder: system-audio loopback (soundcard) piped as f32le PCM into ffmpeg
   platform_utils.py  open_folder() per OS
   cli.py             Typer app (entry point `youtube-vault`)
   gui.py             Tkinter App (entry point `youtube-vault-gui`, also `youtube-vault gui`)
 ```
 
-**Layering rule:** the core (`config`, `downloader`, `history`, `download_queue`,
+**Layering rule:** the core (`config`, `downloader`, `history`, `download_queue`, `recorder`,
 `platform_utils`) never imports `cli`, `gui`, `typer`, `rich` or `tkinter`. Both front-ends depend
 only on the core. `cli.gui` imports `gui` lazily so the CLI doesn't need Tk.
 
@@ -70,6 +72,13 @@ Key flows:
   yt-dlp `format_sort` (`res:N` = largest ≤ N, else smallest above; `res` is the short side, so
   Shorts/21:9 work), not `[height<=N]` filters. See `config.QUALITY_PRESETS` and
   `downloader.format_sort_for`. `list_resolutions(media)` gives the real per-video list.
+- **Recording:** `recorder.Recorder.start()` opens `ffmpeg` (`encoder_command`) with stdin as a pipe
+  and a `yv-recorder` thread that reads 100 ms loopback blocks via `soundcard` and writes them to it;
+  `stop()` closes stdin and waits for ffmpeg. `soundcard` is imported lazily (`_soundcard()`), so
+  nothing else needs it. The GUI "Ghi âm" tab polls `elapsed`/`level`/`error` in `_poll`; `stop()`
+  runs off the Tk thread and reports back via `_ui_calls`. Recordings are not added to history.
+  Tests inject `source_factory`/`popen` (`Recorder`) and `recorder_factory`/`list_devices` (`App`),
+  so they never open a real sound device or ffmpeg.
 - **Errors:** the core raises `YoutubeVaultError` subclasses (`FFmpegNotFoundError`,
   `DownloadFailedError`, `DownloadCancelledError`). The CLI turns them into Rich messages and
   `typer.Exit(1)` (`cli._run_download`). The GUI shows them per item.

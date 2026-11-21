@@ -17,6 +17,7 @@ from queue import Empty, SimpleQueue
 from tkinter import filedialog, messagebox, ttk
 
 from . import downloader
+from . import recorder as recorder_mod
 from .config import (
     AUDIO_FORMATS,
     AUDIO_QUALITIES,
@@ -30,18 +31,32 @@ from .config import (
 )
 from .download_queue import DownloadItem, DownloadQueue, ItemStatus
 from .downloader import (
+    FFmpegNotFoundError,
     MediaInfo,
     ResolutionOption,
+    YoutubeVaultError,
     ffmpeg_install_instructions,
     is_ffmpeg_available,
 )
+from .recorder import Recorder
 from .history import History
 from .platform_utils import open_folder
 
-__all__ = ["App", "bitrate_choices", "format_row", "main", "parse_urls", "quality_choices"]
+__all__ = [
+    "App",
+    "bitrate_choices",
+    "format_elapsed",
+    "format_row",
+    "main",
+    "parse_urls",
+    "quality_choices",
+]
 
 BEST_QUALITY_LABEL = "Tốt nhất"
 BEST_BITRATE_LABEL = "Tốt nhất (VBR)"
+DEFAULT_DEVICE_LABEL = "Loa mặc định"
+RECORD_START_TEXT = "● Bắt đầu ghi"
+RECORD_STOP_TEXT = "■ Dừng & lưu"
 
 STATUS_LABELS: dict[ItemStatus, str] = {
     ItemStatus.QUEUED: "Đang chờ",
@@ -140,6 +155,13 @@ def _format_eta(seconds: int | None) -> str:
     return f"{h}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
 
 
+def format_elapsed(seconds: float) -> str:
+    """Thời lượng ghi âm dạng ``MM:SS`` (hoặc ``H:MM:SS``)."""
+    m, s = divmod(int(seconds), 60)
+    h, m = divmod(m, 60)
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
+
+
 def item_percent(item: DownloadItem) -> float:
     if item.status in (ItemStatus.COMPLETED, ItemStatus.SKIPPED):
         return 100.0
@@ -192,9 +214,18 @@ class App(ttk.Frame):
         history: History | None = None,
         download_queue: DownloadQueue | None = None,
         check_ffmpeg: bool = True,
+        recorder_factory: Callable[..., Recorder] | None = None,
+        list_devices: Callable[[], list[str]] | None = None,
     ) -> None:
         super().__init__(master, padding=10)
         self.root = master
+        # Ghi âm: hai hàm có thể thay khi test (không đụng tới loa thật).
+        self._recorder_factory = recorder_factory or recorder_mod.Recorder
+        self._list_devices = list_devices or recorder_mod.list_output_devices
+        self.recorder: Recorder | None = None
+        self._record_stopping = False
+        self._devices_loaded = False
+        self.last_record_path: Path | None = None
         self.history = history if history is not None else self._open_history()
         self._updates: SimpleQueue[int] = SimpleQueue()
         # Việc cần chạy trên luồng Tk, do luồng nền gửi sang (đọc ra trong ``_poll``).
@@ -286,8 +317,12 @@ class App(ttk.Frame):
         self.history_tab = ttk.Frame(self.notebook, padding=6)
         self.notebook.add(self.queue_tab, text="Hàng đợi")
         self.notebook.add(self.history_tab, text="Lịch sử")
+        self.record_tab = ttk.Frame(self.notebook, padding=10)
+        self.notebook.add(self.record_tab, text="Ghi âm")
         self._build_queue_tab()
         self._build_history_tab()
+        self._build_record_tab()
+        self.notebook.bind("<<NotebookTabChanged>>", lambda e: self._on_tab_changed())
 
     @staticmethod
     def _make_tree(parent: ttk.Frame, columns: tuple[tuple[str, str, int], ...]) -> ttk.Treeview:
@@ -360,6 +395,161 @@ class App(ttk.Frame):
         ttk.Button(bar, text="Làm mới", command=self.refresh_history).pack(side="left")
         self.history_info_var = tk.StringVar()
         ttk.Label(bar, textvariable=self.history_info_var).pack(side="right")
+
+    def _build_record_tab(self) -> None:
+        tab = self.record_tab
+        tab.columnconfigure(1, weight=1)
+        ttk.Label(
+            tab,
+            text=("Ghi lại âm thanh đang phát ra loa (trình duyệt, livestream, trình phát web…).\n"
+                  "Lưu ý: ghi TOÀN BỘ âm thanh của máy, kể cả thông báo của ứng dụng khác."),
+            foreground="#555", justify="left",
+        ).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 8))
+
+        ttk.Label(tab, text="Loa:").grid(row=1, column=0, sticky="w")
+        self.device_var = tk.StringVar(value=DEFAULT_DEVICE_LABEL)
+        self.device_combo = ttk.Combobox(tab, state="readonly", textvariable=self.device_var,
+                                         values=[DEFAULT_DEVICE_LABEL])
+        self.device_combo.grid(row=1, column=1, sticky="ew", padx=(4, 4))
+        ttk.Button(tab, text="Làm mới", command=self.refresh_devices).grid(row=1, column=2)
+        self.device_status_var = tk.StringVar()
+        ttk.Label(tab, textvariable=self.device_status_var, foreground="#c62828").grid(
+            row=2, column=1, columnspan=3, sticky="w")
+
+        fmt_row = ttk.Frame(tab)
+        fmt_row.grid(row=3, column=1, columnspan=3, sticky="w", pady=(6, 0))
+        ttk.Label(tab, text="Định dạng:").grid(row=3, column=0, sticky="w", pady=(6, 0))
+        self.rec_format_var = tk.StringVar(value=DEFAULT_AUDIO_FORMAT)
+        ttk.Combobox(fmt_row, width=8, state="readonly", values=list(AUDIO_FORMATS),
+                     textvariable=self.rec_format_var).pack(side="left", padx=(4, 16))
+        ttk.Label(fmt_row, text="Bitrate:").pack(side="left")
+        self.rec_bitrate_var = tk.StringVar(value=self.bitrate_var.get())
+        ttk.Combobox(fmt_row, width=16, state="readonly", values=list(self._bitrate_map),
+                     textvariable=self.rec_bitrate_var).pack(side="left", padx=(4, 16))
+        ttk.Label(fmt_row, text="Lưu vào thư mục ở ô \"Lưu vào\" phía trên.",
+                  foreground="#555").pack(side="left")
+
+        ctrl = ttk.Frame(tab)
+        ctrl.grid(row=4, column=0, columnspan=4, sticky="ew", pady=(12, 0))
+        self.record_button = ttk.Button(ctrl, text=RECORD_START_TEXT, width=16,
+                                        command=self.toggle_recording)
+        self.record_button.pack(side="left")
+        self.record_time_var = tk.StringVar(value=format_elapsed(0))
+        ttk.Label(ctrl, textvariable=self.record_time_var, font=("TkDefaultFont", 16)).pack(
+            side="left", padx=(12, 12))
+        self.record_level = ttk.Progressbar(ctrl, mode="determinate", maximum=100, length=220)
+        self.record_level.pack(side="left")
+
+        self.record_status_var = tk.StringVar()
+        ttk.Label(tab, textvariable=self.record_status_var, wraplength=760, justify="left").grid(
+            row=5, column=0, columnspan=4, sticky="w", pady=(10, 0))
+        self.record_open_button = ttk.Button(tab, text="Mở thư mục", state="disabled",
+                                             command=self.open_last_record)
+        self.record_open_button.grid(row=6, column=0, sticky="w", pady=(6, 0))
+
+    # ------------------------------- ghi âm ------------------------------- #
+    def _on_tab_changed(self) -> None:
+        if self.notebook.select() == str(self.record_tab) and not self._devices_loaded:
+            self.refresh_devices()
+
+    def refresh_devices(self) -> None:
+        """Lấy danh sách loa ở luồng nền (lần đầu nạp thư viện âm thanh có thể hơi lâu)."""
+        self._devices_loaded = True
+        self.device_status_var.set("")
+
+        def work() -> None:  # luồng nền: chỉ gửi kết quả qua _ui_calls
+            try:
+                names = self._list_devices()
+            except Exception as exc:
+                self._ui_calls.put(lambda e=exc: self.device_status_var.set(str(e)))
+            else:
+                self._ui_calls.put(lambda: self._on_devices_loaded(names))
+
+        threading.Thread(target=work, daemon=True, name="yv-devices").start()
+
+    def _on_devices_loaded(self, names: list[str]) -> None:
+        values = [DEFAULT_DEVICE_LABEL, *names]
+        self.device_combo.configure(values=values)
+        if self.device_var.get() not in values:
+            self.device_var.set(DEFAULT_DEVICE_LABEL)
+
+    def selected_device(self) -> str | None:
+        name = self.device_var.get()
+        return None if name in ("", DEFAULT_DEVICE_LABEL) else name
+
+    @property
+    def is_recording(self) -> bool:
+        return self.recorder is not None and not self._record_stopping
+
+    def toggle_recording(self) -> None:
+        if self._record_stopping:
+            return
+        if self.recorder is None:
+            self.start_recording()
+        else:
+            self.stop_recording()
+
+    def start_recording(self) -> None:
+        out = self.out_var.get().strip() or str(DEFAULT_OUTPUT_DIR)
+        quality = self._bitrate_map.get(self.rec_bitrate_var.get(), DEFAULT_AUDIO_QUALITY)
+        try:
+            rec = self._recorder_factory(out, self.rec_format_var.get(), quality,
+                                         self.selected_device())
+            path = rec.start()
+        except FFmpegNotFoundError:
+            self._warn_ffmpeg()
+            return
+        except (YoutubeVaultError, ValueError, OSError) as exc:
+            messagebox.showerror("Không ghi âm được", str(exc), parent=self.root)
+            return
+        self.recorder = rec
+        self.record_button.configure(text=RECORD_STOP_TEXT)
+        self.record_status_var.set(f"Đang ghi vào: {path}")
+
+    def stop_recording(self) -> None:
+        """Dừng ghi; ffmpeg lưu file ở luồng nền rồi báo lại qua ``_ui_calls``."""
+        rec = self.recorder
+        if rec is None or self._record_stopping:
+            return
+        self._record_stopping = True
+        self.record_button.configure(text="Đang lưu…", state="disabled")
+
+        def work() -> None:
+            try:
+                path = rec.stop()
+            except Exception as exc:
+                self._ui_calls.put(lambda e=exc: self._on_record_finished(None, e))
+            else:
+                self._ui_calls.put(lambda: self._on_record_finished(path, None))
+
+        threading.Thread(target=work, daemon=True, name="yv-record-stop").start()
+
+    def _on_record_finished(self, path: Path | None, error: Exception | None) -> None:
+        elapsed = self.recorder.elapsed if self.recorder is not None else 0.0
+        self.recorder = None
+        self._record_stopping = False
+        self.record_button.configure(text=RECORD_START_TEXT, state="normal")
+        self.record_level["value"] = 0
+        if error is not None:
+            self.record_status_var.set(f"Lỗi khi ghi âm: {error}")
+            messagebox.showerror("Ghi âm thất bại", str(error), parent=self.root)
+            return
+        self.last_record_path = path
+        self.record_status_var.set(f"Đã lưu ({format_elapsed(elapsed)}): {path}")
+        self.record_open_button.configure(state="normal")
+
+    def _update_record_status(self) -> None:
+        rec = self.recorder
+        if rec is None or self._record_stopping:
+            return
+        self.record_time_var.set(format_elapsed(rec.elapsed))
+        self.record_level["value"] = rec.level * 100
+        if rec.error is not None:  # thiết bị lỗi giữa chừng -> dừng, báo lỗi qua stop()
+            self.stop_recording()
+
+    def open_last_record(self) -> None:
+        if self.last_record_path is not None:
+            self._open(self.last_record_path)
 
     # ------------------------------ nhập liệu ----------------------------- #
     def _on_kind_change(self) -> None:
@@ -607,6 +797,7 @@ class App(ttk.Frame):
             self._update_detail()
         if refresh_history:
             self.refresh_history()
+        self._update_record_status()
         if not self._closed:
             self._poll_job = self.after(self.POLL_MS, self._poll)
 
@@ -674,6 +865,11 @@ class App(ttk.Frame):
             try:
                 self.after_cancel(self._poll_job)
             except tk.TclError:
+                pass
+        if self.recorder is not None and not self._record_stopping:
+            try:  # đang ghi thì lưu file lại trước khi đóng
+                self.recorder.stop()
+            except Exception:
                 pass
         self.queue.shutdown(timeout=3)
         self.root.destroy()

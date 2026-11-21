@@ -16,6 +16,7 @@ from youtube_vault.downloader import (
 )
 from youtube_vault.gui import (
     bitrate_choices,
+    format_elapsed,
     format_row,
     item_percent,
     parse_urls,
@@ -309,4 +310,96 @@ def test_app_fetch_resolutions_error_reenables_button(tk_root, monkeypatch, hist
     assert "Video unavailable" in errors[0]
     assert str(app.res_button.cget("state")) == "normal"
     assert app.selected_quality() == "best"
+    app.close()
+
+
+# -------------------------------- ghi âm ----------------------------------- #
+def test_format_elapsed():
+    assert format_elapsed(0) == "00:00"
+    assert format_elapsed(83.9) == "01:23"
+    assert format_elapsed(3725) == "1:02:05"
+
+
+class FakeGuiRecorder:
+    def __init__(self, output_dir, fmt, audio_quality, device):
+        self.args = (Path(output_dir), fmt, audio_quality, device)
+        self.path = Path(output_dir) / f"Ghi âm test.{fmt}"
+        self.elapsed = 0.0
+        self.level = 0.0
+        self.error = None
+        self.stopped = False
+
+    def start(self):
+        return self.path
+
+    def stop(self):
+        self.stopped = True
+        return self.path
+
+
+def test_app_record_tab_start_poll_stop(tk_root, history, tmp_path):
+    from youtube_vault.gui import RECORD_START_TEXT, RECORD_STOP_TEXT, App
+
+    made: list[FakeGuiRecorder] = []
+
+    def factory(*args):
+        made.append(FakeGuiRecorder(*args))
+        return made[-1]
+
+    app = App(tk_root, history=history, download_queue=DownloadQueue(), check_ffmpeg=False,
+              recorder_factory=factory, list_devices=lambda: ["Loa A", "Tai nghe B"])
+    app.out_var.set(str(tmp_path))
+
+    # danh sách loa nạp lười khi mở tab "Ghi âm"
+    app.notebook.select(app.record_tab)
+    _pump(tk_root, lambda: "Tai nghe B" in app.device_combo.cget("values"))
+    app.device_var.set("Tai nghe B")
+    app.rec_format_var.set("m4a")
+    app.rec_bitrate_var.set("192 kbps")
+
+    app.toggle_recording()
+    rec = made[0]
+    assert rec.args == (tmp_path, "m4a", "192", "Tai nghe B")
+    assert app.record_button.cget("text") == RECORD_STOP_TEXT
+    assert app.is_recording
+
+    rec.elapsed, rec.level = 83.0, 0.4
+    _pump(tk_root, lambda: app.record_time_var.get() == "01:23")
+    assert app.record_level["value"] == pytest.approx(40)
+
+    app.toggle_recording()
+    _pump(tk_root, lambda: app.recorder is None)
+    assert rec.stopped
+    assert app.record_button.cget("text") == RECORD_START_TEXT
+    assert app.last_record_path == rec.path
+    assert "Đã lưu (01:23)" in app.record_status_var.get()
+    assert str(app.record_open_button.cget("state")) == "normal"
+    app.close()
+
+
+def test_app_default_device_is_none(tk_root, history, tmp_path):
+    from youtube_vault.gui import App
+
+    made: list[FakeGuiRecorder] = []
+    app = App(tk_root, history=history, download_queue=DownloadQueue(), check_ffmpeg=False,
+              recorder_factory=lambda *a: made.append(FakeGuiRecorder(*a)) or made[-1],
+              list_devices=lambda: [])
+    app.out_var.set(str(tmp_path))
+    app.start_recording()
+    assert made[0].args == (tmp_path, "mp3", "best", None)
+    app.close()  # đang ghi thì close() lưu file
+    assert made[0].stopped
+
+
+def test_app_device_list_error_shown(tk_root, history):
+    from youtube_vault.gui import App
+    from youtube_vault.recorder import RecorderUnavailableError
+
+    def broken():
+        raise RecorderUnavailableError("Không dùng được thư viện ghi âm")
+
+    app = App(tk_root, history=history, download_queue=DownloadQueue(), check_ffmpeg=False,
+              list_devices=broken)
+    app.refresh_devices()
+    _pump(tk_root, lambda: "thư viện ghi âm" in app.device_status_var.get())
     app.close()

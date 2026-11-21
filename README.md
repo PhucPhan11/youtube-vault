@@ -9,6 +9,7 @@ Công cụ dòng lệnh để tải video và audio YouTube về máy, xây dự
 - Thanh tiến độ hiển thị bằng Rich
 - **Giao diện desktop** (Tkinter): dán nhiều URL, hàng đợi tải song song, tạm dừng/tiếp tục/hủy, tự thử lại khi lỗi
 - **Lịch sử tải** (SQLite): tự bỏ qua video đã tải, xem lại, mở thư mục chứa file
+- **Ghi âm âm thanh đang phát** (trình duyệt, livestream, trình phát web…) ra `mp3`/`m4a`/`opus`/`wav`, bằng CLI hoặc tab *Ghi âm* trên GUI
 
 > Phần lõi (`downloader.py`, `download_queue.py`, `history.py`) không phụ thuộc giao diện. CLI và GUI đều dùng chung phần lõi này.
 
@@ -102,9 +103,40 @@ uv run youtube-vault gui
   - Lỗi mạng được tự thử lại tối đa 2 lần (chờ 2 giây, rồi 5 giây). Lỗi như thiếu ffmpeg thì không thử lại. Mục bị lỗi có thể bấm *Thử lại* bằng tay.
   - Double-click một mục để mở thư mục chứa file.
 - **Tab Lịch sử:** tìm theo tiêu đề, mở thư mục chứa file, xóa mục khỏi lịch sử (file đã tải vẫn được giữ).
-- Khi đóng cửa sổ, các mục đang tải được tạm dừng và giữ file `.part`.
+- **Tab Ghi âm:** chọn loa, định dạng, bitrate rồi bấm *● Bắt đầu ghi*; bấm *■ Dừng & lưu* để lưu file vào thư mục ở ô *Lưu vào*. Có đồng hồ thời gian và thanh độ to. Xem thêm mục [Ghi âm âm thanh đang phát](#ghi-âm-âm-thanh-đang-phát).
+- Khi đóng cửa sổ, các mục đang tải được tạm dừng và giữ file `.part`; nếu đang ghi âm thì file ghi âm được lưu lại.
 
 > Lưu ý: bước ghép video/audio bằng ffmpeg không ngắt được giữa chừng, nên lệnh tạm dừng/hủy chỉ có hiệu lực sau bước đó.
+
+## Ghi âm âm thanh đang phát
+
+Dùng khi muốn lấy âm thanh từ trình duyệt mà không tải được bằng link (livestream, trang web không được yt-dlp hỗ trợ, trình phát nhúng…). Chương trình ghi lại **âm thanh phát ra loa** (WASAPI loopback trên Windows, monitor của PulseAudio trên Linux) rồi mã hóa bằng ffmpeg.
+
+```bash
+# Liệt kê các loa ghi được
+uv run youtube-vault record --list-devices
+
+# Ghi tới khi bấm Ctrl+C (mặc định mp3, chất lượng cao nhất)
+uv run youtube-vault record
+
+# Ghi 90 giây, m4a 192 kbps, từ một loa cụ thể
+uv run youtube-vault record -t 90 -f m4a -b 192 -d "Speakers (Realtek High Definition Audio)"
+```
+
+| Tùy chọn | Mặc định | Giá trị |
+|---|---|---|
+| `--format`, `-f` | `mp3` | `mp3`, `m4a`, `opus`, `wav` |
+| `--bitrate`, `-b` | `best` | `best`, `320`, `256`, `192`, `128` (kbps); không áp dụng cho `wav` |
+| `--device`, `-d` | loa mặc định | tên loa (xem `--list-devices`) |
+| `--duration`, `-t` | không giới hạn | số giây, hết thì tự dừng và lưu |
+| `--out`, `-o` | `~/Downloads/youtube-vault/` | thư mục lưu |
+
+File được đặt tên theo thời điểm bắt đầu ghi, ví dụ `Ghi âm 2026-11-21 09-05-07.mp3`. File ghi âm không được đưa vào lịch sử tải.
+
+Lưu ý:
+- Ghi **toàn bộ** âm thanh của máy (cả âm báo của ứng dụng khác), không riêng một tab. Nên tắt âm thanh khác khi ghi.
+- Hỗ trợ Windows và Linux. macOS không ghi được âm thanh hệ thống sẵn, cần cài thiết bị ảo như [BlackHole](https://github.com/ExistentialAudio/BlackHole).
+- Chỉ ghi nội dung mà bạn có quyền sử dụng; tôn trọng bản quyền và điều khoản của trang web.
 
 ## Lịch sử tải
 
@@ -140,6 +172,14 @@ queue = DownloadQueue(max_workers=3, history=History(), on_update=lambda item: p
 item = queue.add("https://www.youtube.com/watch?v=jNQXAC9IVRw", kind="audio", audio_format="mp3",
                  audio_quality="320", embed_metadata=True)
 queue.pause(item.id); queue.resume(item.id)
+
+# Ghi âm âm thanh đang phát trong 10 giây
+import time
+from youtube_vault.recorder import Recorder
+
+rec = Recorder("~/Music", fmt="mp3", audio_quality="192")
+rec.start(); time.sleep(10)
+print(rec.stop())  # đường dẫn file đã lưu
 ```
 
 ## Cấu trúc
@@ -150,6 +190,7 @@ src/youtube_vault/
 ├── downloader.py      # logic tải, gói yt-dlp, không phụ thuộc giao diện
 ├── history.py         # lịch sử SQLite + nối vào yt-dlp (download_archive, postprocessor)
 ├── download_queue.py  # hàng đợi: đa luồng, tạm dừng/tiếp tục/hủy, tự thử lại
+├── recorder.py        # ghi âm thanh đang phát ra loa (soundcard + ffmpeg)
 ├── platform_utils.py  # mở thư mục chứa file theo từng hệ điều hành
 ├── cli.py             # CLI bằng Typer + Rich
 └── gui.py             # giao diện desktop bằng Tkinter
