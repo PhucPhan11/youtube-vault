@@ -61,6 +61,20 @@ HISTORY_DB: Path = DATA_DIR / "history.db"
 
 # Cookie đăng nhập (cho video Facebook riêng tư/nhóm...). File này được dùng tự động nếu tồn tại.
 DEFAULT_COOKIES_FILE: Path = DATA_DIR / "cookies.txt"
+# Tên extractor của yt-dlp -> tên trang dễ đọc (dùng trong thông báo lỗi). Trang khác: viết hoa chữ đầu.
+SITE_NAMES: dict[str, str] = {
+    "youtube": "YouTube",
+    "facebook": "Facebook",
+    "instagram": "Instagram",
+    "twitter": "X (Twitter)",
+    "tiktok": "TikTok",
+    "vimeo": "Vimeo",
+    "dailymotion": "Dailymotion",
+    "soundcloud": "SoundCloud",
+    "bilibili": "Bilibili",
+    "reddit": "Reddit",
+    "twitch": "Twitch",
+}
 COOKIES_BROWSERS: tuple[str, ...] = (
     "chrome", "edge", "firefox", "brave", "opera", "vivaldi", "chromium",
 )

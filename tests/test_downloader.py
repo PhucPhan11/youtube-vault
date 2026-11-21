@@ -603,8 +603,9 @@ def test_friendly_error_chrome_cookie_decrypt():
 
 def test_friendly_error_leaves_other_messages():
     assert friendly_error("ERROR: Video unavailable") == "ERROR: Video unavailable"
-    # lỗi đăng nhập của trang khác Facebook: giữ nguyên
-    assert friendly_error("ERROR: [vimeo] login required") == "ERROR: [vimeo] login required"
+    assert friendly_error("ERROR: [youtube] abc: Video unavailable") == "ERROR: [youtube] abc: Video unavailable"
+    # có chữ "login" nhưng không rõ trang nào: giữ nguyên
+    assert friendly_error("login required") == "login required"
 
 
 def test_facebook_login_error_gets_hint(fake_ydl, ffmpeg_present, tmp_path):
@@ -679,3 +680,116 @@ def test_strip_audio_source_marker_ignores_other_files(tmp_path):
     video.write_bytes(b"v")
     _, info = downloader.StripAudioSourceMarker().run({"filepath": str(video)})
     assert info["filepath"] == str(video) and video.exists()
+
+
+# ------------------------ Instagram / X / trang khác ----------------------- #
+@pytest.mark.parametrize(
+    ("message", "site"),
+    [
+        ("ERROR: [instagram] Chunk8: Requested content is not available, rate-limit reached or "
+         "login required. Use --cookies", "Instagram"),
+        ("ERROR: [Instagram] abc: login required", "Instagram"),
+        ("ERROR: [twitter] 123: NSFW tweet requires authentication. Use --cookies", "X (Twitter)"),
+        ("ERROR: [twitter:broadcast] 1: This content is protected", "X (Twitter)"),
+        ("ERROR: [youtube] xyz: Sign in to confirm you're not a bot. Use --cookies", "YouTube"),
+        ("ERROR: [vimeo] 5: login required", "Vimeo"),
+        ("ERROR: [someblog] 5: login required", "Someblog"),
+    ],
+)
+def test_friendly_error_login_hint_names_site(message, site):
+    out = friendly_error(message)
+    assert out.startswith(message)
+    assert f"cần đăng nhập {site}" in out
+    assert "cookies.txt" in out
+
+
+def test_site_name():
+    assert downloader.site_name("twitter:amplify") == "X (Twitter)"
+    assert downloader.site_name("Instagram") == "Instagram"
+    assert downloader.site_name("dailymotion") == "Dailymotion"
+    assert downloader.site_name("newsite") == "Newsite"
+
+
+def test_silent_logger_in_all_opts(fake_ydl, ffmpeg_present, tmp_path):
+    download_video("https://x.com/a/status/1", output_dir=tmp_path)
+    download_audio("https://x.com/a/status/1", output_dir=tmp_path)
+    get_info("https://x.com/a/status/1")
+    for inst in fake_ydl.instances:
+        logger = inst.opts["logger"]
+        for level in ("debug", "info", "warning", "error"):
+            assert getattr(logger, level)("ERROR: something") is None  # không in, không lỗi
+
+
+def test_ytdlp_does_not_print_errors_itself(capsys, tmp_path):
+    """Với YoutubeDL thật: lỗi chỉ đi theo exception, không bị yt-dlp tự in ra console."""
+    import yt_dlp
+
+    opts = downloader._base_opts(tmp_path, None)
+    with yt_dlp.YoutubeDL(opts) as ydl, pytest.raises(DownloadError):
+        ydl.report_error("[twitter] 1: boom")
+    captured = capsys.readouterr()
+    assert "boom" not in captured.out and "boom" not in captured.err
+
+
+def _audio_source(tmp_path: Path, ext: str) -> Path:
+    return tmp_path / f"Video [abc]{config.AUDIO_SOURCE_MARKER}.{ext}"
+
+
+def test_audio_without_sound_raises_no_audio_and_cleans_up(fake_ydl, ffmpeg_present, tmp_path):
+    src = _audio_source(tmp_path, "mp4")
+    thumb = _audio_source(tmp_path, "jpg")
+    part = tmp_path / f"Other [zzz]{config.AUDIO_SOURCE_MARKER}.mp4.part"  # lượt tải khác: giữ nguyên
+    video = tmp_path / "Video [abc].mp4"  # file video đã tải trước đó: giữ nguyên
+    for f in (src, thumb, part, video):
+        f.write_bytes(b"x")
+    fake_ydl.hook_events = [{"status": "finished", "filename": str(src), "downloaded_bytes": 1}]
+    fake_ydl.postprocess_error = DownloadError(
+        "ERROR: Postprocessing: WARNING: unable to obtain file audio codec with ffprobe"
+    )
+    with pytest.raises(downloader.NoAudioStreamError, match="không có âm thanh"):
+        download_audio("https://www.instagram.com/reel/abc/", output_dir=tmp_path)
+    assert not src.exists() and not thumb.exists()
+    assert part.exists() and video.exists()
+
+
+def test_no_audio_error_is_not_retried_by_queue(monkeypatch, tmp_path):
+    import time as _time
+
+    from youtube_vault.download_queue import DownloadQueue, ItemStatus
+
+    calls = []
+
+    def fake_audio(url, **kw):
+        calls.append(url)
+        raise downloader.NoAudioStreamError("Video này không có âm thanh")
+
+    monkeypatch.setattr(downloader, "download_audio", fake_audio)
+    q = DownloadQueue(retry_delays=(0,))
+    item = q.add("u", kind="audio", output_dir=tmp_path)
+    deadline = _time.monotonic() + 3
+    while item.status != ItemStatus.FAILED and _time.monotonic() < deadline:
+        _time.sleep(0.01)
+    q.shutdown(timeout=1)
+    assert item.status == ItemStatus.FAILED
+    assert calls == ["u"]  # lỗi không tự khỏi -> không thử lại
+    assert "không có âm thanh" in item.error
+
+
+def test_other_audio_failure_keeps_partials_and_is_download_failed(fake_ydl, ffmpeg_present, tmp_path):
+    part = _audio_source(tmp_path, "m4a.part")
+    part.write_bytes(b"x")
+    fake_ydl.error = DownloadError("ERROR: [instagram] abc: HTTP Error 503")
+    with pytest.raises(DownloadFailedError):
+        download_audio("https://www.instagram.com/reel/abc/", output_dir=tmp_path)
+    assert part.exists()  # lỗi mạng: giữ .part để tải tiếp
+
+
+def test_list_supported_sites():
+    all_sites = downloader.list_supported_sites()
+    assert len(all_sites) > 500
+    assert "generic" not in {s.lower() for s in all_sites}
+    assert len({s.lower() for s in all_sites}) == len(all_sites)  # không trùng hoa/thường
+    insta = downloader.list_supported_sites("INSTA")
+    assert "Instagram" in insta and all("insta" in s.lower() for s in insta)
+    assert "twitter" in downloader.list_supported_sites("twitter")
+    assert downloader.list_supported_sites("zzz-khong-co") == []

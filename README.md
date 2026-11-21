@@ -1,12 +1,13 @@
 # youtube-vault
 
-Công cụ dòng lệnh để tải video và audio **YouTube, Facebook** (và các trang khác mà yt-dlp hỗ trợ) về máy, xây dựng trên [yt-dlp](https://github.com/yt-dlp/yt-dlp).
+Công cụ dòng lệnh để tải video và audio từ **YouTube, Facebook, Instagram, X (Twitter), TikTok…** (hơn 1.000 trang mà yt-dlp hỗ trợ) về máy, xây dựng trên [yt-dlp](https://github.com/yt-dlp/yt-dlp).
 
 - Tải video mp4 (tự ghép luồng video + audio), chọn độ phân giải từ `best`, 8K/4K, `1440` … `144`, hoặc **chọn từ danh sách độ phân giải mà video thực sự có**
 - Chỉ tải audio (`mp3`, `m4a`, `opus`, `wav`), chọn bitrate (`best`, `320` … `128` kbps), tự gắn tiêu đề/nghệ sĩ và ảnh bìa (thumbnail) vào file
 - Xem thông tin video/playlist mà không cần tải
 - Hỗ trợ URL playlist
 - **Facebook**: tải video/reel công khai ngay; video riêng tư, chỉ bạn bè hoặc trong nhóm thì dùng cookie đăng nhập (xem [Tải video Facebook](#tải-video-facebook))
+- **Instagram, X (Twitter), TikTok và nhiều trang khác**: dán link là tải; lệnh `sites` cho biết một trang có được hỗ trợ không (xem [Các trang khác](#các-trang-khác-instagram-x-tiktok))
 - Thanh tiến độ hiển thị bằng Rich
 - **Giao diện desktop** (Tkinter): dán nhiều URL, hàng đợi tải song song, tạm dừng/tiếp tục/hủy, tự thử lại khi lỗi
 - **Lịch sử tải** (SQLite): tự bỏ qua video đã tải, xem lại, mở thư mục chứa file
@@ -73,6 +74,13 @@ uv run youtube-vault audio "https://www.facebook.com/reel/..."
 
 # Video Facebook cần đăng nhập: dùng file cookie
 uv run youtube-vault video "https://www.facebook.com/..." --cookies D:\cookies.txt
+
+# Instagram (reel/bài đăng) và X (x.com hoặc twitter.com)
+uv run youtube-vault video "https://www.instagram.com/reel/..."
+uv run youtube-vault audio "https://x.com/<tài khoản>/status/..."
+
+# Trang có được hỗ trợ không?
+uv run youtube-vault sites -s tiktok
 ```
 
 ### Tùy chọn
@@ -88,6 +96,7 @@ uv run youtube-vault video "https://www.facebook.com/..." --cookies D:\cookies.t
 | `video`, `audio` | `--force` | tắt | tải lại kể cả khi đã có trong lịch sử |
 | `video`, `audio`, `info` | `--cookies` | `~/.youtube-vault/cookies.txt` nếu có | file cookies.txt để đăng nhập (xem [Tải video Facebook](#tải-video-facebook)) |
 | `video`, `audio`, `info` | `--cookies-from-browser` | không dùng | `chrome`, `edge`, `firefox`, `brave`, `opera`, `vivaldi`, `chromium` (ổn định nhất với `firefox`) |
+| `sites` | `--search`, `-s` | tất cả | lọc danh sách trang được hỗ trợ theo tên, vd. `insta`, `twitter`, `tiktok` (không cần mạng) |
 
 **Cách chọn độ phân giải:** lấy mức lớn nhất không vượt quá mức đã chọn (vd. chọn `1440` mà video chỉ có tới 1080p thì tải 1080p). Nếu video không có mức nào thấp như vậy thì lấy mức nhỏ nhất có sẵn. Độ phân giải tính theo cạnh ngắn của khung hình, nên video dọc (Shorts, 1080×1920) và phim màn ảnh rộng 21:9 (1920×804) đều được tính là 1080p. Cùng độ phân giải thì ưu tiên mp4 + m4a.
 
@@ -110,6 +119,17 @@ Khi video cần đăng nhập mà chưa có cookie, hoặc không đọc đượ
 > ⚠️ **Bảo mật:** file `cookies.txt` chứa phiên đăng nhập Facebook của bạn, ai có file này có thể đăng nhập tài khoản của bạn. Không chia sẻ, không đưa lên Git/cloud. Khi cookie hết hạn (lỗi đăng nhập quay lại), hãy xuất lại file. Muốn ngừng dùng thì xóa file đi. Chương trình không lưu nội dung cookie vào lịch sử.
 
 Chỉ tải nội dung bạn có quyền sử dụng; tôn trọng bản quyền và điều khoản của Facebook.
+
+## Các trang khác (Instagram, X, TikTok…)
+
+Chương trình không giới hạn ở YouTube/Facebook: mọi link được chuyển cho yt-dlp, vốn hỗ trợ hơn 1.000 trang. Kiểm tra một trang bằng `youtube-vault sites -s <tên>` (vd. `sites -s insta`). Trang không có trong danh sách vẫn có thể tải được nếu link trỏ thẳng tới file video (`.mp4`, `.m3u8`).
+
+- **Instagram:** dán link reel (`instagram.com/reel/...`) hoặc bài đăng (`instagram.com/p/...`). Bài đăng có nhiều video được tải như một playlist (mỗi video một file). Tiêu đề thường là "Video by <tài khoản>", nên tên file luôn kèm mã bài để không trùng. Instagram hay giới hạn người chưa đăng nhập (lỗi *rate-limit* / *login required*): khi đó dùng cookie như ở mục Facebook, nhưng xuất cookie khi đang ở trang instagram.com.
+- **X (Twitter):** dán link bài đăng, `x.com/...` hay `twitter.com/...` đều được. Bài nhạy cảm (NSFW), tài khoản khóa hoặc giới hạn tuổi cần cookie đăng nhập (xuất khi đang ở x.com).
+- **Dùng chung một file cookie cho nhiều trang:** xuất cookie lần lượt ở facebook.com, instagram.com, x.com… rồi dán nối nội dung các file vào cùng `~/.youtube-vault/cookies.txt` (định dạng Netscape cho phép nối như vậy). Lưu ý bảo mật ở mục Facebook áp dụng cho mọi trang.
+- Video **không có âm thanh** (một số reel Instagram) thì *Chỉ audio*/*Tải MP3* báo lỗi "Video này không có âm thanh…" ngay, không thử lại; tải dạng video vẫn được.
+- Khi trang cần đăng nhập, lỗi hiển thị kèm tên trang và gợi ý dùng cookie.
+- Trang nào **không tải được** (trình phát nhúng lạ, luồng trực tiếp không có link), hãy dùng [Ghi âm âm thanh đang phát](#ghi-âm-âm-thanh-đang-phát) để ghi lại phần âm thanh.
 
 ## Giao diện desktop (GUI)
 

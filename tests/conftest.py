@@ -17,6 +17,8 @@ class FakeYoutubeDL:
     result: dict[str, Any] | None = None
     error: Exception | None = None
     hook_events: list[dict[str, Any]] = []
+    # Lỗi ném ra SAU khi đã chạy progress hook (giả lập lỗi ở bước postprocess).
+    postprocess_error: Exception | None = None
 
     def __init__(self, opts: dict[str, Any]) -> None:
         self.opts = opts
@@ -49,6 +51,8 @@ class FakeYoutubeDL:
         for event in FakeYoutubeDL.hook_events:
             for hook in self.opts.get("progress_hooks", []):
                 hook(event)
+        if FakeYoutubeDL.postprocess_error is not None:
+            raise FakeYoutubeDL.postprocess_error
 
         # Giả lập postprocessor "after_move" chạy với từng file đã tải.
         if download and result:
@@ -78,6 +82,7 @@ def fake_ydl(monkeypatch: pytest.MonkeyPatch) -> type[FakeYoutubeDL]:
     FakeYoutubeDL.result = {"id": "abc", "title": "Video", "requested_downloads": []}
     FakeYoutubeDL.error = None
     FakeYoutubeDL.hook_events = []
+    FakeYoutubeDL.postprocess_error = None
     monkeypatch.setattr(downloader.yt_dlp, "YoutubeDL", FakeYoutubeDL)
     return FakeYoutubeDL
 

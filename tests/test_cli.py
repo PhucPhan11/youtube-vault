@@ -495,3 +495,51 @@ def test_info_passes_cookies(monkeypatch):
     assert result.exit_code == 0, result.output
     assert captured["cookies"] == downloader.Cookies(browser="edge")
     assert "FB video" in result.output
+
+
+# --------------------------- sites / hiển thị ------------------------------ #
+def test_help_lists_sites_command():
+    result = runner.invoke(app, ["--help"])
+    assert "sites" in result.output
+
+
+def test_sites_search():
+    result = runner.invoke(app, ["sites", "-s", "twitter"])
+    assert result.exit_code == 0, result.output
+    assert "twitter" in result.output
+    assert "khớp với 'twitter'" in result.output
+
+
+def test_sites_no_match_suggests_record():
+    result = runner.invoke(app, ["sites", "-s", "zzz-khong-co"])
+    assert result.exit_code == 0
+    assert "Không tìm thấy" in result.output and "record" in result.output
+
+
+def test_saved_file_names_keep_bracketed_ids(monkeypatch, tmp_path):
+    """Rich không được nuốt mất "[jNQXAC9IVRw]" trong tên file (id bắt đầu bằng chữ thường)."""
+    saved = tmp_path / "Me at the zoo [jNQXAC9IVRw].mp4"
+    monkeypatch.setattr(downloader, "download_video", lambda *a, **k: [saved])
+    result = runner.invoke(app, ["video", "https://youtu.be/x", "-o", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert "[jNQXAC9IVRw]" in result.output.replace("\n", "")
+
+
+def test_error_keeps_site_tag(monkeypatch):
+    def boom(url, **kw):
+        raise DownloadFailedError("ERROR: [twitter:amplify] 93ad: HTTP Error 500")
+
+    monkeypatch.setattr(downloader, "get_info", boom)
+    result = runner.invoke(app, ["info", "https://x.com/a/status/1"])
+    assert result.exit_code == 1
+    assert "[twitter:amplify]" in result.output
+
+
+def test_info_title_with_brackets(monkeypatch):
+    monkeypatch.setattr(
+        downloader, "get_info",
+        lambda url, **kw: MediaInfo(id="1", title="Clip [official] video", uploader="[bot]"),
+    )
+    result = runner.invoke(app, ["info", "https://x.com/a/status/1"])
+    assert result.exit_code == 0, result.output
+    assert "Clip [official] video" in result.output and "[bot]" in result.output

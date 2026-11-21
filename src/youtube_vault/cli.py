@@ -10,8 +10,10 @@ from pathlib import Path
 from typing import Annotated, NoReturn
 
 import typer
+from rich.columns import Columns
 from rich.console import Console
 from rich.live import Live
+from rich.markup import escape
 from rich.panel import Panel
 from rich.progress import (
     BarColumn,
@@ -46,7 +48,7 @@ from .history import History
 from .platform_utils import open_folder
 
 app = typer.Typer(
-    help="youtube-vault — tải video/audio YouTube, Facebook… về máy (dùng yt-dlp).",
+    help="youtube-vault — tải video/audio từ YouTube, Facebook, Instagram, X và nhiều trang khác (dùng yt-dlp).",
     no_args_is_help=True,
     add_completion=False,
 )
@@ -78,7 +80,10 @@ ForceOption = Annotated[
     typer.Option("--force", help="Tải lại kể cả khi đã có trong lịch sử."),
 ]
 UrlArgument = Annotated[
-    str, typer.Argument(help="URL video hoặc playlist (YouTube, Facebook, và các trang yt-dlp hỗ trợ).")
+    str,
+    typer.Argument(
+        help="URL video hoặc playlist (YouTube, Facebook, Instagram, X, TikTok…; xem lệnh sites)."
+    ),
 ]
 
 # Trình duyệt lấy cookie, lấy từ config.
@@ -92,7 +97,7 @@ CookiesOption = Annotated[
         exists=True,
         dir_okay=False,
         help=(
-            "File cookies.txt để đăng nhập (vd. video Facebook riêng tư/nhóm). "
+            "File cookies.txt để đăng nhập (Facebook, Instagram, X…: video riêng tư, nhóm…). "
             "Mặc định dùng ~/.youtube-vault/cookies.txt nếu có."
         ),
     ),
@@ -112,7 +117,7 @@ def _resolve_cookies(file: Path | None, browser: Enum | None) -> Cookies | None:
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from None
     if cookies is not None and file is None and browser is None:
-        console.print(f"[dim]Dùng cookie đăng nhập từ {cookies.file}[/]")
+        console.print(f"[dim]Dùng cookie đăng nhập từ {escape(str(cookies.file))}[/]")
     return cookies
 
 
@@ -187,7 +192,7 @@ def _progress_callback(progress: Progress) -> Callable[[ProgressEvent], None]:
     def callback(event: ProgressEvent) -> None:
         if event.status == "skipped":
             progress.console.print(
-                f"[yellow]⏭ Đã có trong lịch sử, bỏ qua:[/] {event.title or event.filename}"
+                f"[yellow]⏭ Đã có trong lịch sử, bỏ qua:[/] {escape(event.title or event.filename)}"
                 " [dim](dùng --force để tải lại)[/]"
             )
             return
@@ -198,7 +203,7 @@ def _progress_callback(progress: Progress) -> Callable[[ProgressEvent], None]:
                 name = f"[{event.playlist_index}/{event.playlist_count}] {name}"
             if len(name) > 50:
                 name = name[:47] + "..."
-            tasks[key] = progress.add_task(name, total=event.total_bytes)
+            tasks[key] = progress.add_task(escape(name), total=event.total_bytes)
         task_id = tasks[key]
         if event.status == "finished":
             done = event.total_bytes or event.downloaded_bytes
@@ -222,7 +227,7 @@ def _choose_quality(url: str, cookies: Cookies | None = None) -> str:
         with console.status("Đang lấy danh sách độ phân giải..."):
             media = downloader.get_info(url, cookies=cookies)
     except YoutubeVaultError as exc:
-        err_console.print(f"[bold red]Lỗi:[/] {exc}")
+        err_console.print(f"[bold red]Lỗi:[/] {escape(str(exc))}")
         raise typer.Exit(1) from None
     if media.is_playlist:
         err_console.print(
@@ -236,7 +241,7 @@ def _choose_quality(url: str, cookies: Cookies | None = None) -> str:
         console.print("[yellow]Không tìm thấy danh sách độ phân giải, dùng chất lượng tốt nhất.[/]")
         return DEFAULT_QUALITY
 
-    console.print(f"[bold]{media.title or url}[/]")
+    console.print(f"[bold]{escape(media.title or url)}[/]")
     table = Table("#", "Độ phân giải", "FPS", "Dung lượng (ước tính)")
     for i, opt in enumerate(options, start=1):
         table.add_row(
@@ -259,7 +264,7 @@ def _run_download(action: Callable[[Callable[[ProgressEvent], None]], list[Path]
     except FFmpegNotFoundError as exc:
         _exit_ffmpeg_missing(exc.instructions)
     except YoutubeVaultError as exc:
-        err_console.print(f"[bold red]Lỗi:[/] {exc}")
+        err_console.print(f"[bold red]Lỗi:[/] {escape(str(exc))}")
         raise typer.Exit(1) from None
 
     if not files:
@@ -267,7 +272,7 @@ def _run_download(action: Callable[[Callable[[ProgressEvent], None]], list[Path]
         return
     console.print(f"[bold green]Đã lưu {len(files)} file:[/]")
     for f in files:
-        console.print(f"  • {f}")
+        console.print(f"  • {escape(str(f))}")
 
 
 # --------------------------------------------------------------------------- #
@@ -355,7 +360,7 @@ def _level_bar(level: float, width: int = 10) -> str:
 def _fail(exc: YoutubeVaultError) -> NoReturn:
     if isinstance(exc, FFmpegNotFoundError):
         _exit_ffmpeg_missing(exc.instructions)
-    err_console.print(f"[bold red]Lỗi:[/] {exc}")
+    err_console.print(f"[bold red]Lỗi:[/] {escape(str(exc))}")
     raise typer.Exit(1)
 
 
@@ -399,7 +404,7 @@ def record(
         except YoutubeVaultError as exc:
             _fail(exc)
         for i, name in enumerate(names):
-            console.print(f"  • {name}" + (" [dim](mặc định)[/]" if i == 0 else ""))
+            console.print(f"  • {escape(name)}" + (" [dim](mặc định)[/]" if i == 0 else ""))
         return
 
     rec = recorder.Recorder(out, fmt.value, bitrate.value, device)
@@ -407,7 +412,7 @@ def record(
         rec.start()
     except YoutubeVaultError as exc:
         _fail(exc)
-    console.print(f"Đang ghi vào [bold]{rec.path}[/] — bấm Ctrl+C để dừng.")
+    console.print(f"Đang ghi vào [bold]{escape(str(rec.path))}[/] — bấm Ctrl+C để dừng.")
     try:
         with Live(console=console, refresh_per_second=8, transient=True) as live:
             while rec.is_recording and (duration is None or rec.elapsed < duration):
@@ -422,7 +427,28 @@ def record(
             path = rec.stop()
         except YoutubeVaultError as exc:
             _fail(exc)
-    console.print(f"[bold green]Đã lưu ({_format_duration(rec.elapsed)}):[/] {path}")
+    console.print(f"[bold green]Đã lưu ({_format_duration(rec.elapsed)}):[/] {escape(str(path))}")
+
+
+@app.command()
+def sites(
+    search: Annotated[
+        str | None,
+        typer.Option("--search", "-s", help="Lọc theo tên trang, vd. insta, twitter, tiktok."),
+    ] = None,
+) -> None:
+    """Xem các trang tải được (không cần mạng)."""
+    names = downloader.list_supported_sites(search)
+    if not names:
+        console.print(
+            f"[yellow]Không tìm thấy trang nào khớp với '{search}'.[/] Bạn vẫn có thể thử dán link: "
+            "nhiều trang có link video trực tiếp (.mp4, .m3u8) vẫn tải được. "
+            "Nếu không tải được, hãy dùng lệnh [bold]record[/] để ghi âm thanh đang phát."
+        )
+        return
+    console.print(Columns(names, equal=True, expand=False))
+    label = f"khớp với '{search}'" if search else "được hỗ trợ"
+    console.print(f"[dim]{len(names)} trang {label}.[/]")
 
 
 @app.command()
@@ -444,7 +470,7 @@ def _open_history() -> History | None:
     try:
         return History()
     except (OSError, sqlite3.Error) as exc:
-        err_console.print(f"[yellow]Không mở được lịch sử ({exc}); tiếp tục mà không ghi lịch sử.[/]")
+        err_console.print(f"[yellow]Không mở được lịch sử ({escape(str(exc))}); tiếp tục mà không ghi lịch sử.[/]")
         return None
 
 
@@ -473,8 +499,8 @@ def history_list(
             str(r.id),
             r.downloaded_at.replace("T", " "),
             r.kind,
-            r.title or "?",
-            r.filepath or "",
+            escape(r.title or "?"),
+            escape(r.filepath or ""),
         )
     console.print(table)
 
@@ -514,7 +540,7 @@ def history_open(
     try:
         open_folder(record.filepath)
     except FileNotFoundError as exc:
-        err_console.print(f"[red]{exc}[/]")
+        err_console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(1) from None
 
 
@@ -530,21 +556,21 @@ def info(
         with console.status("Đang lấy thông tin..."):
             media = downloader.get_info(url, cookies=cookies)
     except YoutubeVaultError as exc:
-        err_console.print(f"[bold red]Lỗi:[/] {exc}")
+        err_console.print(f"[bold red]Lỗi:[/] {escape(str(exc))}")
         raise typer.Exit(1) from None
     _print_info(media)
 
 
 def _print_info(media: MediaInfo) -> None:
-    console.print(f"[bold]Tiêu đề:[/] {media.title}")
+    console.print(f"[bold]Tiêu đề:[/] {escape(media.title or '?')}")
     if media.uploader:
-        console.print(f"[bold]Kênh:[/] {media.uploader}")
+        console.print(f"[bold]Kênh:[/] {escape(media.uploader)}")
 
     if media.is_playlist:
         console.print(f"[bold]Playlist:[/] {len(media.entries)} video")
         table = Table("#", "Tiêu đề", "Thời lượng", "ID")
         for i, entry in enumerate(media.entries, start=1):
-            table.add_row(str(i), entry.title or "?", _format_duration(entry.duration), entry.id or "")
+            table.add_row(str(i), escape(entry.title or "?"), _format_duration(entry.duration), entry.id or "")
         console.print(table)
         return
 

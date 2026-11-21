@@ -17,7 +17,8 @@ stay English.
 uv sync                                   # create/refresh .venv (incl. dev group: pytest)
 uv run pytest                             # full suite (~5 s, fully offline)
 uv run pytest tests/test_download_queue.py -k pause -q
-uv run youtube-vault --help               # commands: video, audio, record, info, history, gui
+uv run youtube-vault --help               # commands: video, audio, record, info, sites, history, gui
+uv run youtube-vault sites -s insta       # offline: is a site supported by yt-dlp?
 uv run youtube-vault record -t 3 -o <dir> # records real system audio (needs a sound device)
 uv run youtube-vault info <url>           # metadata only, no ffmpeg needed (hits network)
 uv run youtube-vault video <url> -q 720 -o <dir>
@@ -79,12 +80,22 @@ Key flows:
   runs off the Tk thread and reports back via `_ui_calls`. Recordings are not added to history.
   Tests inject `source_factory`/`popen` (`Recorder`) and `recorder_factory`/`list_devices` (`App`),
   so they never open a real sound device or ffmpeg.
-- **Sites & login cookies:** nothing is YouTube-specific; URLs go straight to yt-dlp (Facebook works).
+- **Sites & login cookies:** nothing is YouTube-specific; URLs go straight to yt-dlp (Facebook,
+  Instagram, X verified for real). Never add per-site download code; `list_supported_sites()` (the
+  `sites` command) reads yt-dlp's extractor list offline. `friendly_error` names the site from the
+  `[extractor]` tag via `config.SITE_NAMES` / `site_name()`.
   `downloader.Cookies` (file or browser) is resolved by the front-ends via `Cookies.resolve`
   (explicit > `config.DEFAULT_COOKIES_FILE` if it exists) and passed as `cookies=` to `get_info`,
   `download_video`, `download_audio` and `DownloadQueue.add`; `Cookies.apply` sets `cookiefile` /
   `cookiesfrombrowser`. yt-dlp errors (incl. `CookieLoadError`, which is not a `DownloadError`) are
   caught as `YoutubeDLError` and passed through `friendly_error` for Vietnamese login hints.
+- **Console output:** all yt-dlp opts carry `logger=_SilentLogger()` so yt-dlp never prints its own
+  `ERROR:` lines; errors reach the user once, via our exceptions. In the CLI, always wrap titles,
+  file names, paths and error text in `rich.markup.escape()` — otherwise Rich swallows `[jNQX…]`
+  ids and `[twitter]` tags as markup.
+- **Audio from a silent video** raises `NoAudioStreamError` (a `YoutubeVaultError`, so the queue
+  doesn't retry it) and `_remove_audio_sources` deletes that download's `.yv-audio.*` leftovers
+  (never `.part` files).
 - **Filenames:** `OUTPUT_TEMPLATE` caps the title (`%(title).150B`) — don't use yt-dlp
   `trim_file_name`, it trims the whole path. Audio downloads use `AUDIO_SOURCE_TEMPLATE`
   (`….yv-audio.%(ext)s`) so yt-dlp never reuses and then deletes a same-named video mp4 (sites with

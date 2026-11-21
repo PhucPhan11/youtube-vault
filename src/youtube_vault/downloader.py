@@ -6,6 +6,7 @@ và GUI sau này đều dùng lại được. Tiến độ được báo qua ``p
 
 from __future__ import annotations
 
+import glob
 import platform
 import re
 import shutil
@@ -46,6 +47,7 @@ __all__ = [
     "FFmpegNotFoundError",
     "FormatInfo",
     "MediaInfo",
+    "NoAudioStreamError",
     "ProgressCallback",
     "ProgressEvent",
     "ResolutionOption",
@@ -58,7 +60,9 @@ __all__ = [
     "get_info",
     "is_ffmpeg_available",
     "list_resolutions",
+    "list_supported_sites",
     "normalize_quality",
+    "site_name",
 ]
 
 
@@ -85,33 +89,73 @@ class DownloadCancelledError(YoutubeVaultError):
     """Việc tải bị dừng theo yêu cầu (qua ``cancel_event``)."""
 
 
+class NoAudioStreamError(YoutubeVaultError):
+    """Video không có âm thanh nên không tách audio được (không thử lại)."""
+
+
 _LOGIN_HINT = (
-    "Gợi ý: video này cần đăng nhập. Xuất cookie của trình duyệt đang đăng nhập ra file "
-    "cookies.txt rồi lưu vào ~/.youtube-vault/cookies.txt hoặc dùng --cookies <file> (xem README)."
+    "Gợi ý: video này có thể cần đăng nhập {site}. Xuất cookie của trình duyệt đang đăng nhập ra "
+    "file cookies.txt rồi lưu vào ~/.youtube-vault/cookies.txt hoặc dùng --cookies <file> "
+    "(xem README)."
 )
 _BROWSER_COOKIE_HINT = (
     "Gợi ý: không đọc được cookie trực tiếp từ trình duyệt (Chrome/Edge mới mã hóa cookie và khóa "
     "file khi đang mở). Hãy xuất cookie ra file cookies.txt và dùng --cookies <file>, "
     "hoặc dùng --cookies-from-browser firefox."
 )
+# Dấu hiệu "cần đăng nhập" mà yt-dlp báo ở nhiều trang (Instagram, X, YouTube, Facebook...).
 _LOGIN_PATTERNS = (
-    "login", "log in", "logged in", "registered users", "use --cookies",
-    "cookies-from-browser", "cannot parse data", "private video", "not available",
+    "login", "log in", "logged in", "sign in", "registered users", "use --cookies",
+    "cookies-from-browser", "requires authentication", "authentication required",
+    "rate-limit", "rate limit", "nsfw", "age-restricted", "age restricted",
+    "private video", "protected",
 )
+# Facebook báo thiếu đăng nhập bằng các thông điệp chung chung hơn.
+_FACEBOOK_LOGIN_PATTERNS = ("cannot parse data", "not available")
 _BROWSER_COOKIE_PATTERNS = (
     "dpapi", "could not copy chrome cookie database", "app-bound", "app bound",
     "failed to decrypt", "could not find", "cookie database",
 )
+_SITE_TAG_RE = re.compile(r"\[([a-z0-9]+)(?::[^\]]*)?\]", re.IGNORECASE)
+_NO_AUDIO_PATTERNS = ("unable to obtain file audio codec", "does not contain any stream")
+
+
+def site_name(extractor: str) -> str:
+    """Tên trang dễ đọc từ tên extractor của yt-dlp (``"twitter:amplify"`` -> ``"X (Twitter)"``)."""
+    key = extractor.split(":", 1)[0].strip().lower()
+    return config.SITE_NAMES.get(key, key.capitalize())
+
+
+def _site_from_message(message: str) -> str | None:
+    for match in _SITE_TAG_RE.finditer(message):
+        key = match.group(1).lower()
+        if key not in ("download", "info", "error", "generic"):
+            return site_name(key)
+    return None
 
 
 def friendly_error(message: str) -> str:
-    """Thêm gợi ý tiếng Việt cho lỗi đăng nhập/cookie thường gặp (Facebook, Chrome...)."""
+    """Thêm gợi ý tiếng Việt cho lỗi đăng nhập/cookie thường gặp (Instagram, X, Facebook, Chrome...)."""
     low = message.lower()
     if "cookie" in low and any(p in low for p in _BROWSER_COOKIE_PATTERNS):
         return f"{message}\n{_BROWSER_COOKIE_HINT}"
-    if "facebook" in low and any(p in low for p in _LOGIN_PATTERNS):
-        return f"{message}\n{_LOGIN_HINT}"
+    site = _site_from_message(message)
+    needs_login = any(p in low for p in _LOGIN_PATTERNS) or (
+        "facebook" in low and any(p in low for p in _FACEBOOK_LOGIN_PATTERNS)
+    )
+    if needs_login and (site is not None or "facebook" in low):
+        return f"{message}\n{_LOGIN_HINT.format(site=site or 'Facebook')}"
     return message
+
+
+class _SilentLogger:
+    """Logger cho yt-dlp: không in gì ra console. Lỗi vẫn đi theo exception và được
+    CLI/GUI hiển thị một lần, bằng tiếng Việt."""
+
+    def debug(self, msg: str) -> None:
+        pass
+
+    info = warning = error = debug
 
 
 def _error_message(exc: YoutubeDLError) -> str:
@@ -339,6 +383,7 @@ def get_info(url: str, *, cookies: Cookies | None = None) -> MediaInfo:
     """
     opts: dict[str, Any] = {
         "quiet": True,
+        "logger": _SilentLogger(),
         "no_warnings": True,
         "skip_download": True,
         "extract_flat": "in_playlist",
@@ -460,6 +505,7 @@ def _base_opts(
     opts: dict[str, Any] = {
         "outtmpl": str(output_dir / OUTPUT_TEMPLATE),
         "quiet": True,
+        "logger": _SilentLogger(),
         "no_warnings": True,
         "noprogress": True,
         "noplaylist": False,
@@ -638,13 +684,60 @@ def download_audio(
             opts["writethumbnail"] = True
             postprocessors.append({"key": "EmbedThumbnail", "already_have_thumbnail": False})
     opts["postprocessors"] = postprocessors
-    return _run(
-        url,
-        opts,
-        kind="audio",
-        progress_callback=progress_callback,
-        history=history,
-        force=force,
-        cancel_event=cancel_event,
-        extra_postprocessors=[StripAudioSourceMarker()],
-    )
+
+    # Ghi lại các file nguồn đã tải xong, để dọn dẹp nếu bước chuyển audio thất bại.
+    finished: list[str] = []
+
+    def remember_finished(d: dict[str, Any]) -> None:
+        if d.get("status") == "finished" and d.get("filename"):
+            finished.append(str(d["filename"]))
+
+    opts["progress_hooks"] = [*opts.get("progress_hooks", []), remember_finished]
+    try:
+        return _run(
+            url,
+            opts,
+            kind="audio",
+            progress_callback=progress_callback,
+            history=history,
+            force=force,
+            cancel_event=cancel_event,
+            extra_postprocessors=[StripAudioSourceMarker()],
+        )
+    except DownloadFailedError as exc:
+        _remove_audio_sources(finished)
+        if any(p in str(exc).lower() for p in _NO_AUDIO_PATTERNS):
+            raise NoAudioStreamError(
+                "Video này không có âm thanh nên không tách audio được. "
+                "Hãy tải dạng video nếu cần."
+            ) from exc
+        raise
+
+
+def _remove_audio_sources(filenames: list[str]) -> None:
+    """Xóa file nguồn ``….yv-audio.*`` (và thumbnail đi kèm) còn sót của một lượt tải audio lỗi.
+
+    Chỉ đụng tới file mang ``AUDIO_SOURCE_MARKER`` của đúng video này; file ``.part`` không
+    nằm trong danh sách (chỉ file đã tải xong) nên việc tải tiếp không bị ảnh hưởng.
+    """
+    for name in filenames:
+        src = Path(name)
+        if not src.stem.endswith(AUDIO_SOURCE_MARKER):
+            continue
+        for leftover in src.parent.glob(glob.escape(src.stem) + ".*"):
+            if not leftover.name.endswith(".part"):
+                leftover.unlink(missing_ok=True)
+
+
+def list_supported_sites(search: str | None = None) -> list[str]:
+    """Tên các trang yt-dlp hỗ trợ (bỏ trùng theo phần trước dấu ``:``), lọc theo ``search``."""
+    names: dict[str, str] = {}  # chữ thường -> tên hiển thị (ưu tiên tên có chữ hoa: "Instagram")
+    for ie in yt_dlp.extractor.gen_extractor_classes():
+        name = ie.IE_NAME.split(":", 1)[0]
+        key = name.lower()
+        if not ie.working() or key == "generic":  # "generic" = trình tải dự phòng, không phải trang
+            continue
+        if key not in names or names[key] == key:
+            names[key] = name
+    term = (search or "").strip().lower()
+    return sorted((n for k, n in names.items() if term in k), key=str.lower)

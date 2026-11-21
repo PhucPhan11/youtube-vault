@@ -256,7 +256,10 @@ class App(ttk.Frame):
         box.pack(fill="x")
         box.columnconfigure(1, weight=1)
 
-        ttk.Label(box, text="URL YouTube, Facebook…\n(mỗi dòng một link,\ncó thể là playlist):").grid(
+        ttk.Label(
+            box,
+            text="URL YouTube, Facebook,\nInstagram, X…\n(mỗi dòng một link,\ncó thể là playlist):",
+        ).grid(
             row=0, column=0, sticky="nw", padx=(0, 8)
         )
         self.url_text = tk.Text(box, height=4, wrap="none", undo=True)
