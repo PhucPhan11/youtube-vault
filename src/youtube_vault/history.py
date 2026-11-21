@@ -1,11 +1,11 @@
-"""Lịch sử tải lưu bằng SQLite, cộng thêm phần nối vào yt-dlp.
+"""Download history stored in SQLite, plus the glue into yt-dlp.
 
-- ``History``: đọc/ghi bảng ``downloads``. Mỗi thao tác mở một connection riêng
-  nên an toàn khi gọi từ nhiều luồng tải cùng lúc.
-- ``HistoryArchive``: đối tượng giống set, truyền vào tùy chọn
-  ``download_archive`` của yt-dlp để bỏ qua video đã tải.
-- ``HistoryRecorder``: postprocessor của yt-dlp, ghi lịch sử ngay khi một video
-  tải xong (kể cả khi playlist lỗi giữa chừng).
+- ``History``: reads/writes the ``downloads`` table. Every operation opens its own
+  connection, so it is safe to call from several download threads at once.
+- ``HistoryArchive``: set-like object passed as yt-dlp's ``download_archive``
+  option to skip videos that were already downloaded.
+- ``HistoryRecorder``: yt-dlp postprocessor that records history as soon as a video
+  finishes (even if a playlist fails halfway).
 """
 
 from __future__ import annotations
@@ -57,7 +57,7 @@ class HistoryRecord:
 
 
 def make_archive_id(info: dict[str, Any]) -> str | None:
-    """Mã định danh giống yt-dlp: ``"<extractor_key viết thường> <id>"``."""
+    """Identifier in yt-dlp's format: ``"<lower-case extractor_key> <id>"``."""
     extractor = info.get("extractor_key") or info.get("ie_key") or info.get("extractor")
     video_id = info.get("id")
     if not extractor or not video_id:
@@ -78,7 +78,7 @@ class History:
         conn = sqlite3.connect(self.db_path, timeout=10)
         conn.row_factory = sqlite3.Row
         try:
-            with conn:  # tự commit/rollback
+            with conn:  # commits/rolls back automatically
                 yield conn
         finally:
             conn.close()
@@ -155,10 +155,10 @@ class History:
 
 
 class HistoryArchive:
-    """Đối tượng giống set cho tùy chọn ``download_archive`` của yt-dlp.
+    """Set-like object for yt-dlp's ``download_archive`` option.
 
-    yt-dlp chỉ dùng ``in`` và ``add``. Việc ghi lịch sử do ``HistoryRecorder``
-    lo (vì nó có đủ title/filepath), nên ``add`` không làm gì.
+    yt-dlp only uses ``in`` and ``add``. Recording history is ``HistoryRecorder``'s job
+    (it has the title/filepath), so ``add`` does nothing.
     """
 
     def __init__(
@@ -184,12 +184,12 @@ class HistoryArchive:
     def add(self, archive_id: str) -> None:
         return None
 
-    def __bool__(self) -> bool:  # yt-dlp bỏ qua archive nếu nó "rỗng"
+    def __bool__(self) -> bool:  # yt-dlp ignores the archive if it is "empty"
         return True
 
 
 class HistoryRecorder(PostProcessor):
-    """Ghi lịch sử sau khi file đã được chuyển tới vị trí cuối cùng."""
+    """Record history once the file has been moved to its final location."""
 
     def __init__(self, history: History, kind: str, downloader: Any = None) -> None:
         super().__init__(downloader)

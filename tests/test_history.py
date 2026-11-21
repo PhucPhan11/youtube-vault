@@ -51,7 +51,7 @@ def test_list_search_and_limit(hist):
 
     assert len(hist.list(limit=3)) == 3
     assert [r.title for r in hist.list(search="zoo")] == ["Me at the zoo"]
-    # mới nhất trước
+    # newest first
     assert hist.list()[0].title == "Me at the zoo"
 
 
@@ -80,7 +80,7 @@ def test_archive_contains_triggers_on_skip(hist):
     assert "youtube other" not in archive
     assert 123 not in archive
     assert [r.title for r in skipped] == ["Done"]
-    archive.add("youtube new")  # không ghi gì
+    archive.add("youtube new")  # records nothing
     assert not hist.contains("youtube new", "video")
 
 

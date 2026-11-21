@@ -1,6 +1,6 @@
 ---
 name: add-feature
-description: End-to-end checklist for adding or changing a youtube-vault feature across config, core (downloader/history/download_queue), CLI, GUI, tests and the Vietnamese README. Use when implementing a new option, command, download behaviour, or GUI capability.
+description: End-to-end checklist for adding or changing a youtube-vault feature across config, core (downloader/history/download_queue), CLI, GUI, tests and the English README. Use when implementing a new option, command, download behaviour, or GUI capability.
 ---
 
 # Add a feature to youtube-vault
@@ -45,8 +45,10 @@ say so in your summary. Read `CLAUDE.md` first if it isn't in context.
 - Cover the happy path, the main error path, and any skip/force or pause/cancel interaction.
 - No network, no real ffmpeg, no real `~/.youtube-vault`.
 
-## 6. Docs: `README.md` (Vietnamese)
-- Add a usage example and update the options table and/or the GUI section. Update the `Cấu trúc`
+## 6. Docs: `README.md` (English)
+- Add a usage example and update the options table and/or the GUI section. Quote GUI labels in
+  Vietnamese with an English gloss. Comments and docstrings in code are English; UI strings stay
+  Vietnamese (see CLAUDE.md "Language rule"). Update the `Project structure`
   tree if you add a module.
 
 ## 7. Verify

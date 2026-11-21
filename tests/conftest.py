@@ -1,4 +1,4 @@
-"""Fixture dùng chung: giả lập yt-dlp, không bao giờ gọi mạng."""
+"""Shared fixtures: a fake yt-dlp; tests never touch the network."""
 
 from __future__ import annotations
 
@@ -11,13 +11,13 @@ from youtube_vault.history import History, make_archive_id
 
 
 class FakeYoutubeDL:
-    """Thay cho yt_dlp.YoutubeDL: ghi lại opts, trả về info giả."""
+    """Stand-in for yt_dlp.YoutubeDL: records opts, returns fake info."""
 
     instances: list[FakeYoutubeDL] = []
     result: dict[str, Any] | None = None
     error: Exception | None = None
     hook_events: list[dict[str, Any]] = []
-    # Lỗi ném ra SAU khi đã chạy progress hook (giả lập lỗi ở bước postprocess).
+    # Error raised AFTER the progress hooks ran (simulates a postprocessing failure).
     postprocess_error: Exception | None = None
 
     def __init__(self, opts: dict[str, Any]) -> None:
@@ -41,7 +41,7 @@ class FakeYoutubeDL:
             raise FakeYoutubeDL.error
         result = FakeYoutubeDL.result
 
-        # Giả lập download_archive: video đã có thì bỏ qua, không tải.
+        # Simulate download_archive: skip videos that are already in it.
         archive = self.opts.get("download_archive")
         if download and archive is not None and result:
             archive_id = make_archive_id(result)
@@ -54,7 +54,7 @@ class FakeYoutubeDL:
         if FakeYoutubeDL.postprocess_error is not None:
             raise FakeYoutubeDL.postprocess_error
 
-        # Giả lập postprocessor "after_move" chạy với từng file đã tải.
+        # Simulate "after_move" postprocessors running for each downloaded file.
         if download and result:
             for req in result.get("requested_downloads") or []:
                 for pp, when in self.post_processors:
@@ -65,9 +65,9 @@ class FakeYoutubeDL:
 
 @pytest.fixture(autouse=True)
 def _isolated_history_db(tmp_path, monkeypatch: pytest.MonkeyPatch):
-    """Không bao giờ đụng tới ~/.youtube-vault thật khi chạy test."""
+    """Tests never touch the real ~/.youtube-vault."""
     monkeypatch.setattr(config, "HISTORY_DB", tmp_path / "default-history.db")
-    # Không bao giờ đọc cookie đăng nhập thật của người dùng.
+    # Never read the user's real login cookies.
     monkeypatch.setattr(config, "DEFAULT_COOKIES_FILE", tmp_path / "default-cookies.txt")
 
 

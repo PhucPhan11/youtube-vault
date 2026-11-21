@@ -1,12 +1,12 @@
-"""Hàng đợi tải: chạy song song có giới hạn số luồng, tạm dừng/tiếp tục/hủy, tự thử lại.
+"""Download queue: bounded parallel workers, pause/resume/cancel, automatic retries.
 
-Module này KHÔNG phụ thuộc giao diện. ``on_update(item)`` được gọi từ luồng tải,
-nên giao diện phải tự chuyển việc cập nhật về luồng chính của nó.
+This module does NOT depend on any UI. ``on_update(item)`` is called from download
+threads, so a UI must move the update onto its own main thread.
 
-- Tạm dừng: dừng tải nhưng giữ file ``.part``; tiếp tục thì yt-dlp tải nối tiếp.
-- Hủy: dừng tải và xóa các file ``.part`` / ``.ytdl`` của item.
-- Bước ghép/chuyển đổi bằng ffmpeg không ngắt được giữa chừng; lệnh dừng có
-  hiệu lực sau bước đó.
+- Pause: stop downloading but keep the ``.part`` file; resuming lets yt-dlp continue it.
+- Cancel: stop downloading and delete the item's ``.part`` / ``.ytdl`` files.
+- The ffmpeg merge/convert step cannot be interrupted; a stop takes effect
+  after it.
 """
 
 from __future__ import annotations
@@ -68,9 +68,9 @@ class DownloadItem:
     kind: str = "video"  # "video" | "audio"
     quality: str = DEFAULT_QUALITY
     audio_format: str = DEFAULT_AUDIO_FORMAT
-    audio_quality: str = DEFAULT_AUDIO_QUALITY  # bitrate: "best" hoặc kbps
+    audio_quality: str = DEFAULT_AUDIO_QUALITY  # bitrate: "best" or kbps
     embed_metadata: bool = DEFAULT_EMBED_METADATA
-    cookies: Cookies | None = None  # cookie đăng nhập (Facebook riêng tư/nhóm...)
+    cookies: Cookies | None = None  # login cookies (private/group Facebook videos...)
     output_dir: Path = DEFAULT_OUTPUT_DIR
     force: bool = False
     status: ItemStatus = ItemStatus.QUEUED
@@ -115,7 +115,7 @@ class DownloadQueue:
         self._closed = False
 
     # ------------------------------------------------------------------ #
-    # Truy vấn
+    # Queries
     # ------------------------------------------------------------------ #
     @property
     def max_workers(self) -> int:
@@ -134,7 +134,7 @@ class DownloadQueue:
             return len(self._threads)
 
     # ------------------------------------------------------------------ #
-    # Điều khiển
+    # Control
     # ------------------------------------------------------------------ #
     def add(
         self,
@@ -204,7 +204,7 @@ class DownloadQueue:
         return ids
 
     def shutdown(self, timeout: float = 5.0) -> None:
-        """Dừng nhận việc mới, tạm dừng các item đang tải (giữ .part), chờ luồng kết thúc."""
+        """Stop accepting work, pause running items (keeping .part files), wait for threads."""
         with self._lock:
             self._closed = True
             threads = list(self._threads.items())
@@ -217,13 +217,13 @@ class DownloadQueue:
             thread.join(timeout)
 
     # ------------------------------------------------------------------ #
-    # Nội bộ
+    # Internals
     # ------------------------------------------------------------------ #
     def _notify(self, item: DownloadItem) -> None:
         if self.on_update is not None:
             try:
                 self.on_update(item)
-            except Exception:  # lỗi ở UI không được làm chết luồng tải
+            except Exception:  # a UI error must not kill the download thread
                 pass
 
     def _stop(self, item_id: int, reason: str) -> bool:
@@ -276,10 +276,10 @@ class DownloadQueue:
         final = ItemStatus.FAILED
         try:
             final = self._run_item(item)
-        except Exception as exc:  # phòng hờ: không để luồng chết im lặng
+        except Exception as exc:  # safety net: never let the thread die silently
             item.error = f"Lỗi không mong muốn: {exc}"
         finally:
-            # Đặt trạng thái cuối và gỡ luồng cùng lúc, để resume/retry ngay sau đó hợp lệ.
+            # Set the final status and drop the thread together, so an immediate resume/retry is valid.
             with self._lock:
                 item.status = final
                 self._threads.pop(item.id, None)
@@ -302,7 +302,7 @@ class DownloadQueue:
         return callback
 
     def _run_item(self, item: DownloadItem) -> ItemStatus:
-        """Chạy item (kèm thử lại); trả về trạng thái cuối, không tự gán."""
+        """Run the item (with retries); return the final status without assigning it."""
         callback = self._progress_callback(item)
         while True:
             item.attempts += 1
@@ -336,7 +336,7 @@ class DownloadQueue:
             except DownloadFailedError as exc:
                 if item._cancel_event.is_set():
                     return self._stop_status(item)
-                retry_no = item.attempts  # lần thử lại thứ mấy (1-based)
+                retry_no = item.attempts  # which retry this is (1-based)
                 if retry_no > self.max_retries:
                     item.error = str(exc)
                     return ItemStatus.FAILED
@@ -349,7 +349,7 @@ class DownloadQueue:
                 self._notify(item)
                 continue
             except (YoutubeVaultError, ValueError) as exc:
-                # Lỗi không thể tự khỏi (thiếu ffmpeg, tham số sai): không thử lại.
+                # Errors that won't fix themselves (missing ffmpeg, bad arguments): don't retry.
                 item.error = str(exc)
                 if isinstance(exc, FFmpegNotFoundError):
                     item.error += "\n" + exc.instructions

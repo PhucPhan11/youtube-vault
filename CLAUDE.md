@@ -3,13 +3,18 @@
 Download YouTube / Facebook (any yt-dlp site) video/audio to disk. Thin wrapper around **yt-dlp** with two front-ends:
 a **Typer + Rich CLI** and a **Tkinter desktop GUI** (multi-threaded queue, pause/resume/cancel,
 auto-retry, SQLite download history). Python ≥ 3.11, managed with **uv**, built with hatchling,
-`src/` layout. The README is the user manual (in Vietnamese).
+`src/` layout. The README is the user manual (in English).
 
 ## Language rule
 
-These agent docs are English, but **the project itself is Vietnamese**: code comments, docstrings,
-CLI `help=` text, GUI labels, error messages and `README.md` must stay in Vietnamese. Identifiers
-stay English.
+- **English:** all docs (`README.md`, `CLAUDE.md`, skills), code comments, docstrings, identifiers,
+  test comments/docstrings, package metadata.
+- **Vietnamese (the app's UI):** everything the end user sees: CLI `help=` text, **Typer command
+  docstrings** (Typer shows them as CLI help), Rich console messages, GUI labels/messages, exception
+  messages and hints (`friendly_error`), and the recording filename template (`RECORD_FILENAME`).
+  Tests that assert those strings keep the Vietnamese text.
+- When the README mentions a GUI label, quote the Vietnamese label and gloss it in English the first
+  time, e.g. *Tải MP3* (Download MP3).
 
 ## Commands
 
@@ -135,7 +140,7 @@ Key flows:
   for value objects, `str`-valued `Enum`s for choices.
 - Tunables and presets live in `config.py`, not inline.
 - New CLI options use the `Annotated[..., typer.Option(...)]` style already in `cli.py`.
-- Every user-visible feature gets a section or row in `README.md` (Vietnamese).
+- Every user-visible feature gets a section or row in `README.md` (English; quote Vietnamese UI labels).
 - Commits so far are phase-sized: `Phase N: <summary>`.
 
 ## Environment & gotchas

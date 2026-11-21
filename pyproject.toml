@@ -1,7 +1,7 @@
 [project]
 name = "youtube-vault"
 version = "0.1.0"
-description = "Tải video và audio YouTube về máy, dùng yt-dlp."
+description = "Download video and audio from YouTube, Facebook, Instagram, X and other sites, using yt-dlp."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

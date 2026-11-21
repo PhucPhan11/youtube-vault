@@ -73,7 +73,7 @@ def test_audio_without_ffmpeg_shows_instructions(fake_ydl, ffmpeg_missing, tmp_p
 
 def test_video_rejects_unknown_quality():
     result = runner.invoke(app, ["video", "https://youtu.be/x", "--quality", "abc"])
-    assert result.exit_code == 2  # lỗi tham số của Typer
+    assert result.exit_code == 2  # Typer usage error
 
 
 @pytest.mark.parametrize(("arg", "expected"), [("1440", "1440"), ("720p", "720"), ("360", "360")])
@@ -120,7 +120,7 @@ def test_video_choose_prompts_and_uses_selection(monkeypatch, ffmpeg_present, tm
     )
     assert result.exit_code == 0, result.output
     assert "1080p60" in result.output and "720p" in result.output and "144p" in result.output
-    assert captured["quality"] == "720"  # --choose thắng -q
+    assert captured["quality"] == "720"  # --choose wins over -q
 
 
 def test_video_choose_default_is_highest(monkeypatch, ffmpeg_present, tmp_path):
@@ -249,7 +249,7 @@ def test_audio_rejects_invalid_bitrate(monkeypatch, tmp_path):
 # ------------------------------- history ---------------------------------- #
 
 def _seed_history():
-    hist = History()  # dùng DB tạm (fixture autouse trong conftest)
+    hist = History()  # temp DB (autouse fixture in conftest)
     a = hist.add("youtube a", "video", title="Me at the zoo", filepath="C:/x/zoo.mp4")
     b = hist.add("youtube b", "audio", title="Song", filepath="C:/x/song.mp3")
     return hist, a, b
@@ -353,7 +353,7 @@ class FakeRecorder:
 
     @property
     def elapsed(self):
-        self._elapsed += 0.5  # mỗi lần đọc giả như đã ghi thêm nửa giây
+        self._elapsed += 0.5  # every read pretends another half second was recorded
         return self._elapsed
 
     @property
@@ -497,7 +497,7 @@ def test_info_passes_cookies(monkeypatch):
     assert "FB video" in result.output
 
 
-# --------------------------- sites / hiển thị ------------------------------ #
+# ---------------------------- sites / display ------------------------------ #
 def test_help_lists_sites_command():
     result = runner.invoke(app, ["--help"])
     assert "sites" in result.output
@@ -517,7 +517,7 @@ def test_sites_no_match_suggests_record():
 
 
 def test_saved_file_names_keep_bracketed_ids(monkeypatch, tmp_path):
-    """Rich không được nuốt mất "[jNQXAC9IVRw]" trong tên file (id bắt đầu bằng chữ thường)."""
+    """Rich must not swallow "[jNQXAC9IVRw]" in file names (ids starting with a lower-case letter)."""
     saved = tmp_path / "Me at the zoo [jNQXAC9IVRw].mp4"
     monkeypatch.setattr(downloader, "download_video", lambda *a, **k: [saved])
     result = runner.invoke(app, ["video", "https://youtu.be/x", "-o", str(tmp_path)])

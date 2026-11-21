@@ -1,4 +1,4 @@
-"""Test ghi âm bằng nguồn âm thanh và ffmpeg giả (không đụng loa thật, không chạy ffmpeg)."""
+"""Recorder tests with a fake audio source and fake ffmpeg (no real speaker, no ffmpeg run)."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ from youtube_vault.recorder import (
 BLOCK = int(RECORD_SAMPLE_RATE * recorder.RECORD_BLOCK_SECONDS)
 
 
-# ------------------------------ hàm thuần ---------------------------------- #
+# ------------------------------ pure helpers -------------------------------- #
 def _codec_args(cmd: list[str]) -> list[str]:
     return cmd[cmd.index("pipe:0") + 1 : -1]
 
@@ -73,7 +73,7 @@ def test_output_path_uses_timestamp_and_avoids_collisions(tmp_path):
 
 # ------------------------------- Recorder ---------------------------------- #
 class FakeSource:
-    """Nguồn âm thanh giả: trả về ``blocks`` khối rồi chờ tới khi bị dừng."""
+    """Fake audio source: returns ``blocks`` blocks, then waits until stopped."""
 
     def __init__(self, blocks: int = 3, amplitude: float = 0.5, error: Exception | None = None):
         self.blocks = blocks
@@ -106,7 +106,7 @@ class FakeProc:
     def __init__(self, cmd, returncode=0, stderr=b""):
         self.cmd = cmd
         self.stdin = io.BytesIO()
-        self.stdin.close = lambda: None  # giữ lại dữ liệu để kiểm tra
+        self.stdin.close = lambda: None  # keep the data for assertions
         self.returncode = None
         self._rc = returncode
         self._stderr = stderr
@@ -199,4 +199,4 @@ def test_missing_soundcard_is_unavailable(monkeypatch, ffmpeg_present, tmp_path)
     procs: list[FakeProc] = []
     with pytest.raises(RecorderUnavailableError):
         Recorder(tmp_path, popen=_fake_popen(procs)).start()
-    assert procs == []  # không mở ffmpeg khi thiếu thư viện
+    assert procs == []  # ffmpeg is not started when the library is missing

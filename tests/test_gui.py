@@ -24,7 +24,7 @@ from youtube_vault.gui import (
 )
 
 
-# ------------------------------ hàm thuần ---------------------------------- #
+# ------------------------------ pure helpers -------------------------------- #
 def test_parse_urls():
     text = """
     https://youtu.be/a
@@ -62,7 +62,7 @@ def test_format_row_queued_uses_url_and_audio_label():
 def test_format_row_audio_shows_bitrate():
     assert format_row(_item(kind="audio", audio_quality="320"))[1] == "Audio mp3 320k"
     assert format_row(_item(kind="audio", audio_quality="best"))[1] == "Audio mp3"
-    # wav không có bitrate
+    # wav has no bitrate
     assert format_row(_item(kind="audio", audio_format="wav", audio_quality="192"))[1] == "Audio wav"
 
 
@@ -84,7 +84,7 @@ def test_format_row_retrying_and_playlist():
     row = format_row(item, max_retries=3)
     assert row[2] == "Đang thử lại (2/3)"
     assert row[3] == "[2/5] 25.0%"
-    assert row[4] == "" and row[5] == ""  # chỉ hiện tốc độ khi đang tải
+    assert row[4] == "" and row[5] == ""  # speed is only shown while downloading
 
 
 def test_format_row_completed():
@@ -162,7 +162,7 @@ def test_app_end_to_end_with_fake_download(tk_root, monkeypatch, tmp_path, histo
           and app.queue_tree.set(str(items[0].id), "status") == "Hoàn tất")
     assert app.queue_tree.set(str(items[0].id), "title") == "Clip"
     assert "Xong 1" in app.summary_var.get()
-    # tab lịch sử được làm mới sau khi tải xong
+    # the history tab refreshes after a download finishes
     _pump(tk_root, lambda: len(app.history_tree.get_children()) == 1)
 
     app.search_var.set("không-khớp")
@@ -182,7 +182,7 @@ def test_app_kind_switch_changes_options(tk_root, history):
     app.kind_var.set("audio")
     app._on_kind_change()
     assert "mp3" in app.option_combo.cget("values")
-    assert str(app.res_button.cget("state")) == "disabled"  # không áp dụng cho audio
+    assert str(app.res_button.cget("state")) == "disabled"  # not applicable to audio
     app.kind_var.set("video")
     app._on_kind_change()
     assert "1080p" in app.option_combo.cget("values")
@@ -199,7 +199,7 @@ def test_app_mp3_button_adds_audio_mp3_even_in_video_mode(tk_root, monkeypatch, 
         calls.append({"url": url, **kwargs})
         return []
 
-    def fail_video(url, **kwargs):  # không được gọi
+    def fail_video(url, **kwargs):  # must not be called
         raise AssertionError("không được tải video")
 
     monkeypatch.setattr(downloader, "download_audio", fake_audio)
@@ -207,7 +207,7 @@ def test_app_mp3_button_adds_audio_mp3_even_in_video_mode(tk_root, monkeypatch, 
     queue = DownloadQueue(history=history, retry_delays=(0,))
     app = App(tk_root, history=history, download_queue=queue, check_ffmpeg=False)
     assert app.kind_var.get() == "video"
-    app.audio_var.set("m4a")  # nút "Tải MP3" bỏ qua định dạng đang chọn
+    app.audio_var.set("m4a")  # the "Tải MP3" button ignores the selected format
     app.bitrate_var.set("192 kbps")
     app.embed_var.set(False)
     app.url_text.insert("1.0", "https://youtu.be/abc\n")
@@ -272,10 +272,10 @@ def test_app_fetch_resolutions_fills_real_list(tk_root, monkeypatch, tmp_path, h
     app.out_var.set(str(tmp_path))
 
     app.fetch_resolutions()
-    assert str(app.res_button.cget("state")) == "disabled"  # đang lấy
+    assert str(app.res_button.cget("state")) == "disabled"  # fetching
     _pump(tk_root, lambda: "Clip thật" in app.res_status_var.get())
 
-    assert fetched == ["https://youtu.be/a"]  # chỉ video đầu tiên
+    assert fetched == ["https://youtu.be/a"]  # only the first video
     assert app.option_combo.cget("values") == ("1440p", "720p · ~10.0 MB")
     assert app.selected_quality() == "1440"
     assert "(video đầu tiên)" in app.res_status_var.get()
@@ -286,7 +286,7 @@ def test_app_fetch_resolutions_fills_real_list(tk_root, monkeypatch, tmp_path, h
     _pump(tk_root, lambda: calls)
     assert [i.quality for i in items] == ["720", "720"]
     assert calls[0] == "720"
-    # sau khi thêm: quay về danh sách chuẩn, giữ mức 720
+    # after adding: back to the standard list, 720 stays selected
     assert "4320p (8K)" in app.option_combo.cget("values")
     assert app.quality_var.get() == "720p"
     app.close()
@@ -313,7 +313,7 @@ def test_app_fetch_resolutions_error_reenables_button(tk_root, monkeypatch, hist
     app.close()
 
 
-# -------------------------------- ghi âm ----------------------------------- #
+# ------------------------------- recording --------------------------------- #
 def test_format_elapsed():
     assert format_elapsed(0) == "00:00"
     assert format_elapsed(83.9) == "01:23"
@@ -350,7 +350,7 @@ def test_app_record_tab_start_poll_stop(tk_root, history, tmp_path):
               recorder_factory=factory, list_devices=lambda: ["Loa A", "Tai nghe B"])
     app.out_var.set(str(tmp_path))
 
-    # danh sách loa nạp lười khi mở tab "Ghi âm"
+    # the speaker list loads lazily when the "Ghi âm" (Record) tab opens
     app.notebook.select(app.record_tab)
     _pump(tk_root, lambda: "Tai nghe B" in app.device_combo.cget("values"))
     app.device_var.set("Tai nghe B")
@@ -387,7 +387,7 @@ def test_app_default_device_is_none(tk_root, history, tmp_path):
     app.out_var.set(str(tmp_path))
     app.start_recording()
     assert made[0].args == (tmp_path, "mp3", "best", None)
-    app.close()  # đang ghi thì close() lưu file
+    app.close()  # close() saves an active recording
     assert made[0].stopped
 
 
@@ -411,7 +411,7 @@ def test_app_cookie_modes(tk_root, history, tmp_path):
     from youtube_vault.gui import COOKIES_FILE_LABEL, COOKIES_NONE_LABEL, App
 
     app = App(tk_root, history=history, download_queue=DownloadQueue(), check_ffmpeg=False)
-    assert app.cookies_mode_var.get() == COOKIES_NONE_LABEL  # chưa có file mặc định
+    assert app.cookies_mode_var.get() == COOKIES_NONE_LABEL  # no default file yet
     assert app.selected_cookies() is None
     assert str(app.cookies_entry.cget("state")) == "disabled"
 
@@ -479,5 +479,5 @@ def test_app_invalid_cookie_file_adds_nothing(tk_root, history, monkeypatch, tmp
     assert app.add_from_input() == []
     assert app.queue.items() == []
     assert "Không tìm thấy file cookie" in warnings[0]
-    assert "facebook.com" in app.url_text.get("1.0", "end")  # giữ lại URL để sửa
+    assert "facebook.com" in app.url_text.get("1.0", "end")  # URL kept so it can be fixed
     app.close()

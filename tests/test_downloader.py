@@ -52,7 +52,7 @@ def test_download_video_uses_quality_preset(fake_ydl, ffmpeg_present, tmp_path, 
 @pytest.mark.parametrize(
     ("quality", "expected"),
     [
-        ("804", ["res:804", VIDEO_FORMAT_PREFERENCE]),  # mức không chuẩn (video 21:9)
+        ("804", ["res:804", VIDEO_FORMAT_PREFERENCE]),  # non-standard level (21:9 video)
         ("720p", ["res:720", VIDEO_FORMAT_PREFERENCE]),
         ("best", ["res", VIDEO_FORMAT_PREFERENCE]),
     ],
@@ -82,7 +82,7 @@ def test_normalize_quality(raw, expected):
     assert normalize_quality(raw) == expected
 
 
-# ------------------- chọn định dạng thật của yt-dlp (offline) -------------- #
+# --------------------- real yt-dlp format selection (offline) --------------- #
 def _fmt(fid, w, h, ext, vcodec, acodec="none"):
     return dict(format_id=fid, url=f"https://example.invalid/{fid}", protocol="https", ext=ext,
                 vcodec=vcodec, acodec=acodec, width=w, height=h, tbr=float(w or 1) * float(h or 1))
@@ -91,18 +91,18 @@ def _fmt(fid, w, h, ext, vcodec, acodec="none"):
 _AUDIO = [_fmt("140", None, None, "m4a", "none", "mp4a.40.2"),
           _fmt("251", None, None, "webm", "none", "opus")]
 FORMAT_SETS = {
-    # 1440p chỉ có webm/vp9: quy tắc cũ (ưu tiên mp4 trước) sẽ tụt xuống 1080p.
+    # 1440p only exists as webm/vp9: the old rule (mp4 first) would drop to 1080p.
     "landscape": _AUDIO + [
         _fmt("313", 3840, 2160, "webm", "vp9"), _fmt("271", 2560, 1440, "webm", "vp9"),
         _fmt("137", 1920, 1080, "mp4", "avc1"), _fmt("248", 1920, 1080, "webm", "vp9"),
         _fmt("136", 1280, 720, "mp4", "avc1"), _fmt("134", 640, 360, "mp4", "avc1"),
     ],
-    # Shorts: video dọc, height > width.
+    # Shorts: vertical video, height > width.
     "vertical": _AUDIO + [
         _fmt("137", 1080, 1920, "mp4", "avc1"), _fmt("136", 720, 1280, "mp4", "avc1"),
         _fmt("134", 360, 640, "mp4", "avc1"),
     ],
-    # Phim 21:9: "1080p" thực ra là 1920x804.
+    # 21:9 film: "1080p" is really 1920x804.
     "cinema": _AUDIO + [
         _fmt("137", 1920, 804, "mp4", "avc1"), _fmt("136", 1280, 536, "mp4", "avc1"),
     ],
@@ -110,7 +110,7 @@ FORMAT_SETS = {
 
 
 def _select(formats, quality) -> dict:
-    """Cho yt-dlp THẬT chọn định dạng (không mạng, không tải) với opts của download_video."""
+    """Let the REAL yt-dlp pick formats (no network, no download) with download_video's opts."""
     import yt_dlp
 
     opts = {"quiet": True, "format": VIDEO_FORMAT, "format_sort": format_sort_for(quality)}
@@ -126,8 +126,8 @@ def _select(formats, quality) -> dict:
         ("landscape", "best", (3840, 2160)),
         ("landscape", "1440", (2560, 1440)),
         ("landscape", "1080", (1920, 1080)),
-        ("landscape", "480", (640, 360)),    # không có 480 -> mức gần nhất bên dưới
-        ("landscape", "144", (640, 360)),    # thấp hơn mức nhỏ nhất -> lấy mức nhỏ nhất
+        ("landscape", "480", (640, 360)),    # no 480 -> nearest level below
+        ("landscape", "144", (640, 360)),    # below the smallest level -> the smallest one
         ("vertical", "1080", (1080, 1920)),
         ("vertical", "720", (720, 1280)),
         ("cinema", "1080", (1920, 804)),
@@ -142,7 +142,7 @@ def test_real_ytdlp_picks_requested_resolution(format_set, quality, expected):
 
 
 def test_real_ytdlp_prefers_mp4_at_same_resolution():
-    # 1080p có cả mp4/avc1 (137) và webm/vp9 (248): chọn mp4 để ghép mp4 tương thích hơn.
+    # 1080p exists as mp4/avc1 (137) and webm/vp9 (248): pick mp4 for a more compatible mp4 merge.
     assert _select(FORMAT_SETS["landscape"], "1080")["format_id"] == "137+140"
 
 
@@ -170,8 +170,8 @@ def test_list_resolutions_groups_and_sorts():
     assert [o.height for o in options] == [2160, 1080, 720]
     assert [o.label for o in options] == ["2160p (4K)", "1080p60", "720p"]
     by_height = {o.height: o for o in options}
-    assert by_height[1080].filesize == 90_000_000 + 3_000_000  # video lớn nhất + audio m4a
-    assert by_height[2160].filesize is None  # không biết dung lượng video -> không ước tính
+    assert by_height[1080].filesize == 90_000_000 + 3_000_000  # largest video + m4a audio
+    assert by_height[2160].filesize is None  # unknown video size -> no estimate
     assert by_height[720].quality == "720"
 
 
@@ -179,7 +179,7 @@ def test_list_resolutions_uses_short_side_without_note():
     media = _media([
         FormatInfo("v1", vcodec="avc1", width=1080, height=1920),  # Shorts
         FormatInfo("v2", vcodec="avc1", width=720, height=1280),
-        FormatInfo("v3", vcodec="avc1", width=1920, height=804),   # 21:9, không có note
+        FormatInfo("v3", vcodec="avc1", width=1920, height=804),   # 21:9, no note
     ])
     assert [o.height for o in list_resolutions(media)] == [1080, 804, 720]
 
@@ -251,7 +251,7 @@ def test_download_audio_uses_extract_audio_postprocessor(fake_ydl, ffmpeg_presen
     assert opts["format"] == "bestaudio/best"
     assert opts["postprocessors"][0]["key"] == "FFmpegExtractAudio"
     assert opts["postprocessors"][0]["preferredcodec"] == fmt
-    # file nguồn có đuôi phụ, không trùng tên với file video mp4
+    # the source file has an extra suffix, so it never shares the video mp4's name
     assert opts["outtmpl"] == str(tmp_path / config.AUDIO_SOURCE_TEMPLATE)
     pps = fake_ydl.instances[0].post_processors
     assert any(isinstance(pp, downloader.StripAudioSourceMarker) and when == "post_process"
@@ -273,7 +273,7 @@ def test_download_audio_rejects_invalid_bitrate(fake_ydl, ffmpeg_present, tmp_pa
 
 @pytest.mark.parametrize("fmt", ["mp3", "m4a"])
 def test_download_audio_embeds_metadata_and_cover(fake_ydl, ffmpeg_present, tmp_path, fmt):
-    download_audio("https://youtu.be/x", fmt=fmt, output_dir=tmp_path)  # mặc định: có gắn
+    download_audio("https://youtu.be/x", fmt=fmt, output_dir=tmp_path)  # embedding is on by default
     opts = fake_ydl.instances[0].opts
     assert [pp["key"] for pp in opts["postprocessors"]] == [
         "FFmpegExtractAudio",
@@ -458,7 +458,7 @@ def test_audio_not_skipped_when_only_video_in_history(fake_ydl, ffmpeg_present, 
     history.add("youtube abc", "video")
     fake_ydl.result = dict(_DONE_INFO)
     files = download_audio("https://youtu.be/abc", output_dir=tmp_path, history=history)
-    assert files  # vẫn tải
+    assert files  # still downloads
     assert history.contains("youtube abc", "audio")
 
 
@@ -500,7 +500,7 @@ def test_cancel_during_download_raises(fake_ydl, ffmpeg_present, tmp_path):
 
     def cb(e: ProgressEvent) -> None:
         seen.append(e)
-        ev.set()  # dừng sau sự kiện đầu tiên
+        ev.set()  # stop after the first event
 
     with pytest.raises(DownloadCancelledError):
         download_video("https://youtu.be/x", output_dir=tmp_path, progress_callback=cb, cancel_event=ev)
@@ -533,7 +533,7 @@ def _cookie_file(tmp_path: Path) -> Path:
 
 
 def test_cookies_resolve_none_without_default(tmp_path):
-    assert Cookies.resolve() is None  # conftest trỏ file mặc định vào tmp_path (chưa tồn tại)
+    assert Cookies.resolve() is None  # conftest points the default file into tmp_path (missing)
 
 
 def test_cookies_resolve_uses_default_file_when_present():
@@ -604,7 +604,7 @@ def test_friendly_error_chrome_cookie_decrypt():
 def test_friendly_error_leaves_other_messages():
     assert friendly_error("ERROR: Video unavailable") == "ERROR: Video unavailable"
     assert friendly_error("ERROR: [youtube] abc: Video unavailable") == "ERROR: [youtube] abc: Video unavailable"
-    # có chữ "login" nhưng không rõ trang nào: giữ nguyên
+    # says "login" but no site is known: unchanged
     assert friendly_error("login required") == "login required"
 
 
@@ -651,13 +651,13 @@ def test_title_is_capped_in_output_template():
 
 
 def test_long_title_is_truncated_by_real_ytdlp(tmp_path):
-    """Dùng YoutubeDL thật (không mạng) để kiểm tra mẫu tên file cắt tiêu đề dài."""
+    """Use the real YoutubeDL (no network) to check that the template truncates long titles."""
     import yt_dlp
 
     info = {"id": "123", "title": "Bài đăng Facebook rất dài " * 40, "ext": "mp4"}
     with yt_dlp.YoutubeDL({"outtmpl": str(tmp_path / OUTPUT_TEMPLATE), "quiet": True}) as ydl:
         name = Path(ydl.prepare_filename(info)).name
-    assert name.endswith(" [123].mp4")  # id và đuôi file luôn còn nguyên
+    assert name.endswith(" [123].mp4")  # the id and extension are always kept
     title = name[: -len(" [123].mp4")]
     assert len(title.encode("utf-8")) <= config.MAX_TITLE_BYTES
 
@@ -666,7 +666,7 @@ def test_long_title_is_truncated_by_real_ytdlp(tmp_path):
 def test_strip_audio_source_marker_renames(tmp_path, ext):
     src = tmp_path / f"Clip [abc]{config.AUDIO_SOURCE_MARKER}.{ext}"
     src.write_bytes(b"audio")
-    (tmp_path / f"Clip [abc].{ext}").write_bytes(b"old")  # file cũ cùng tên bị ghi đè
+    (tmp_path / f"Clip [abc].{ext}").write_bytes(b"old")  # an old file of the same name is overwritten
     files, info = downloader.StripAudioSourceMarker().run({"filepath": str(src)})
     target = tmp_path / f"Clip [abc].{ext}"
     assert files == []
@@ -682,7 +682,7 @@ def test_strip_audio_source_marker_ignores_other_files(tmp_path):
     assert info["filepath"] == str(video) and video.exists()
 
 
-# ------------------------ Instagram / X / trang khác ----------------------- #
+# ------------------------ Instagram / X / other sites ---------------------- #
 @pytest.mark.parametrize(
     ("message", "site"),
     [
@@ -717,11 +717,11 @@ def test_silent_logger_in_all_opts(fake_ydl, ffmpeg_present, tmp_path):
     for inst in fake_ydl.instances:
         logger = inst.opts["logger"]
         for level in ("debug", "info", "warning", "error"):
-            assert getattr(logger, level)("ERROR: something") is None  # không in, không lỗi
+            assert getattr(logger, level)("ERROR: something") is None  # prints nothing, no error
 
 
 def test_ytdlp_does_not_print_errors_itself(capsys, tmp_path):
-    """Với YoutubeDL thật: lỗi chỉ đi theo exception, không bị yt-dlp tự in ra console."""
+    """With the real YoutubeDL: errors only travel as exceptions; yt-dlp prints nothing itself."""
     import yt_dlp
 
     opts = downloader._base_opts(tmp_path, None)
@@ -738,8 +738,8 @@ def _audio_source(tmp_path: Path, ext: str) -> Path:
 def test_audio_without_sound_raises_no_audio_and_cleans_up(fake_ydl, ffmpeg_present, tmp_path):
     src = _audio_source(tmp_path, "mp4")
     thumb = _audio_source(tmp_path, "jpg")
-    part = tmp_path / f"Other [zzz]{config.AUDIO_SOURCE_MARKER}.mp4.part"  # lượt tải khác: giữ nguyên
-    video = tmp_path / "Video [abc].mp4"  # file video đã tải trước đó: giữ nguyên
+    part = tmp_path / f"Other [zzz]{config.AUDIO_SOURCE_MARKER}.mp4.part"  # another download: kept
+    video = tmp_path / "Video [abc].mp4"  # previously downloaded video: kept
     for f in (src, thumb, part, video):
         f.write_bytes(b"x")
     fake_ydl.hook_events = [{"status": "finished", "filename": str(src), "downloaded_bytes": 1}]
@@ -771,7 +771,7 @@ def test_no_audio_error_is_not_retried_by_queue(monkeypatch, tmp_path):
         _time.sleep(0.01)
     q.shutdown(timeout=1)
     assert item.status == ItemStatus.FAILED
-    assert calls == ["u"]  # lỗi không tự khỏi -> không thử lại
+    assert calls == ["u"]  # the error won't fix itself -> no retry
     assert "không có âm thanh" in item.error
 
 
@@ -781,14 +781,14 @@ def test_other_audio_failure_keeps_partials_and_is_download_failed(fake_ydl, ffm
     fake_ydl.error = DownloadError("ERROR: [instagram] abc: HTTP Error 503")
     with pytest.raises(DownloadFailedError):
         download_audio("https://www.instagram.com/reel/abc/", output_dir=tmp_path)
-    assert part.exists()  # lỗi mạng: giữ .part để tải tiếp
+    assert part.exists()  # network error: keep .part to resume
 
 
 def test_list_supported_sites():
     all_sites = downloader.list_supported_sites()
     assert len(all_sites) > 500
     assert "generic" not in {s.lower() for s in all_sites}
-    assert len({s.lower() for s in all_sites}) == len(all_sites)  # không trùng hoa/thường
+    assert len({s.lower() for s in all_sites}) == len(all_sites)  # no case-only duplicates
     insta = downloader.list_supported_sites("INSTA")
     assert "Instagram" in insta and all("insta" in s.lower() for s in insta)
     assert "twitter" in downloader.list_supported_sites("twitter")

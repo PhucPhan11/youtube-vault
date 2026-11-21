@@ -1,4 +1,4 @@
-"""Test hàng đợi bằng hàm tải giả (không gọi yt-dlp, không mạng)."""
+"""Queue tests with a fake download function (no yt-dlp, no network)."""
 
 from __future__ import annotations
 
@@ -30,16 +30,16 @@ def wait_for(cond: Callable[[], bool], timeout: float = 3.0) -> None:
 
 
 class FakeDownload:
-    """Giả lập download_video/download_audio, điều khiển được từ test."""
+    """Fake download_video/download_audio, controllable from the test."""
 
     def __init__(self) -> None:
-        self.gate = threading.Event()  # set → các lượt tải kết thúc thành công
+        self.gate = threading.Event()  # set → downloads finish successfully
         self.lock = threading.Lock()
         self.active = 0
         self.max_active = 0
         self.calls: list[dict[str, Any]] = []
-        self.fail_times = 0  # số lần đầu ném DownloadFailedError
-        self.error: Exception | None = None  # ném lỗi này mỗi lần
+        self.fail_times = 0  # how many first calls raise DownloadFailedError
+        self.error: Exception | None = None  # raise this on every call
         self.skip = False
         self.write_part: Path | None = None
 
@@ -303,7 +303,7 @@ def test_shutdown_pauses_running(fake, make_queue, tmp_path):
     wait_for(lambda: item.progress is not None)
     q.shutdown(timeout=2)
     assert item.status == ItemStatus.PAUSED
-    # sau shutdown không khởi động việc mới
+    # no new work starts after shutdown
     late = q.add("b", output_dir=tmp_path)
     time.sleep(0.05)
     assert late.status == ItemStatus.QUEUED

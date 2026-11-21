@@ -1,3 +1,3 @@
-"""youtube-vault: tải video/audio YouTube về máy, dùng yt-dlp."""
+"""youtube-vault: download video/audio from YouTube and other sites, using yt-dlp."""
 
 __version__ = "0.1.0"

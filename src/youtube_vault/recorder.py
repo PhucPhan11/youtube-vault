@@ -1,11 +1,11 @@
-"""Ghi âm âm thanh đang phát trên máy (vd. trình duyệt đang mở video/livestream).
+"""Record the audio playing on the computer (e.g. a browser playing a video/livestream).
 
-Dùng "loopback" của loa (WASAPI trên Windows, monitor của PulseAudio trên Linux)
-qua thư viện ``soundcard``, rồi đẩy dữ liệu PCM thô vào ffmpeg để mã hóa sang
-mp3/m4a/opus/wav. Ghi lại TOÀN BỘ âm thanh của máy, không riêng một tab.
+Uses the speaker "loopback" (WASAPI on Windows, the PulseAudio monitor on Linux)
+through the ``soundcard`` library, and pipes raw PCM into ffmpeg to encode it as
+mp3/m4a/opus/wav. Records ALL of the computer's sound, not a single tab.
 
-Module này thuộc phần lõi: không import typer/rich/tkinter. ``soundcard`` được
-import lười (chỉ khi thật sự ghi) để các lệnh khác và test không cần nó.
+This module is part of the core: no typer/rich/tkinter imports. ``soundcard`` is
+imported lazily (only when actually recording) so other commands and tests don't need it.
 """
 
 from __future__ import annotations
@@ -45,20 +45,20 @@ __all__ = [
 
 
 class RecorderUnavailableError(YoutubeVaultError):
-    """Máy không ghi được âm thanh hệ thống (thiếu thư viện, hệ điều hành không hỗ trợ, không có loa)."""
+    """System audio can't be recorded (library missing, unsupported OS, no speaker)."""
 
 
 class RecordingFailedError(YoutubeVaultError):
-    """ffmpeg hoặc thiết bị âm thanh báo lỗi trong lúc ghi."""
+    """ffmpeg or the audio device failed while recording."""
 
 
 class AudioSource(Protocol):
-    """Nguồn âm thanh: mỗi lần trả về một khối ``float32`` dạng (số_frame, số_kênh)."""
+    """Audio source: each call returns a ``float32`` block shaped (frames, channels)."""
 
     def record(self, numframes: int) -> Any: ...
 
 
-# Hàm mở nguồn âm thanh: nhận tên loa (None = loa mặc định), trả về context manager -> AudioSource.
+# Opens an audio source: takes a speaker name (None = default), returns a context manager -> AudioSource.
 SourceFactory = Callable[[str | None], Any]
 
 
@@ -67,8 +67,8 @@ SourceFactory = Callable[[str | None], Any]
 # --------------------------------------------------------------------------- #
 def _soundcard() -> Any:
     try:
-        import soundcard  # noqa: PLC0415 - import lười có chủ đích
-    except Exception as exc:  # ImportError, hoặc lỗi khởi tạo thư viện âm thanh của hệ điều hành
+        import soundcard  # noqa: PLC0415 - deliberately lazy import
+    except Exception as exc:  # ImportError, or the OS audio library failed to initialise
         hint = ""
         if sys.platform == "darwin":
             hint = (
@@ -82,7 +82,7 @@ def _soundcard() -> Any:
 
 
 def list_output_devices() -> list[str]:
-    """Tên các loa có thể ghi lại (loa mặc định đứng đầu)."""
+    """Names of the speakers that can be recorded (default speaker first)."""
     sc = _soundcard()
     try:
         default = sc.default_speaker().name
@@ -93,7 +93,7 @@ def list_output_devices() -> list[str]:
 
 
 def _init_thread_com() -> None:
-    """soundcard trên Windows dùng COM; khởi tạo COM cho luồng hiện tại cho chắc."""
+    """soundcard uses COM on Windows; initialise COM for the current thread to be safe."""
     if sys.platform == "win32":
         try:
             import ctypes
@@ -104,7 +104,7 @@ def _init_thread_com() -> None:
 
 
 def _soundcard_source(device: str | None) -> Any:
-    """Mở loopback của loa ``device`` (None = loa mặc định) bằng soundcard."""
+    """Open the loopback of speaker ``device`` (None = default speaker) with soundcard."""
     sc = _soundcard()
     try:
         speaker = sc.default_speaker() if device is None else sc.get_speaker(device)
@@ -116,7 +116,7 @@ def _soundcard_source(device: str | None) -> Any:
 
 
 # --------------------------------------------------------------------------- #
-# Hàm thuần
+# Pure functions
 # --------------------------------------------------------------------------- #
 def _validate(fmt: str, audio_quality: str) -> None:
     if fmt not in AUDIO_FORMATS:
@@ -131,7 +131,7 @@ def _validate(fmt: str, audio_quality: str) -> None:
 
 
 def encoder_command(out: Path, fmt: str, audio_quality: str) -> list[str]:
-    """Lệnh ffmpeg đọc PCM float32 thô từ stdin và ghi ra ``out`` theo định dạng/bitrate."""
+    """ffmpeg command that reads raw float32 PCM from stdin and writes ``out`` in the given format/bitrate."""
     _validate(fmt, audio_quality)
     cmd = [
         "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
@@ -152,7 +152,7 @@ def encoder_command(out: Path, fmt: str, audio_quality: str) -> list[str]:
 
 
 def output_path(out_dir: Path | str, fmt: str, now: datetime | None = None) -> Path:
-    """Tên file theo thời điểm bắt đầu ghi; thêm `` (2)``, `` (3)``… nếu đã tồn tại."""
+    """File name from the start time; adds `` (2)``, `` (3)``… if it already exists."""
     out = Path(out_dir).expanduser()
     stem = (now or datetime.now()).strftime(RECORD_FILENAME)
     path = out / f"{stem}.{fmt}"
@@ -167,11 +167,11 @@ def output_path(out_dir: Path | str, fmt: str, now: datetime | None = None) -> P
 # Recorder
 # --------------------------------------------------------------------------- #
 class Recorder:
-    """Ghi âm thanh đang phát ra loa vào một file, chạy ở luồng nền.
+    """Records the sound going to the speakers into a file, on a background thread.
 
-    Dùng: ``r = Recorder(...); r.start(); ...; path = r.stop()``.
-    Giao diện chỉ đọc ``elapsed``/``level``/``error`` (an toàn giữa các luồng);
-    Recorder không bao giờ gọi ngược vào giao diện.
+    Usage: ``r = Recorder(...); r.start(); ...; path = r.stop()``.
+    A UI only reads ``elapsed``/``level``/``error`` (safe across threads);
+    the Recorder never calls back into the UI.
     """
 
     def __init__(
@@ -195,13 +195,13 @@ class Recorder:
         self._thread: threading.Thread | None = None
         self._proc: Any = None
         self._frames = 0
-        self.level = 0.0  # độ to khối gần nhất, 0..1
+        self.level = 0.0  # peak level of the latest block, 0..1
         self.error: Exception | None = None
         self.path: Path | None = None
 
     @property
     def elapsed(self) -> float:
-        """Số giây âm thanh đã ghi."""
+        """Seconds of audio recorded so far."""
         return self._frames / RECORD_SAMPLE_RATE
 
     @property
@@ -209,12 +209,12 @@ class Recorder:
         return self._thread is not None and self._thread.is_alive()
 
     def start(self) -> Path:
-        """Bắt đầu ghi; trả về đường dẫn file sẽ được tạo."""
+        """Start recording; return the path of the file that will be created."""
         if self._thread is not None:
             raise RuntimeError("Recorder đã được bắt đầu")
         downloader._require_ffmpeg()
         if self._source_factory is _soundcard_source:
-            _soundcard()  # báo lỗi thiếu thư viện ngay, không đợi tới luồng nền
+            _soundcard()  # report a missing library now, not later on the worker thread
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.path = output_path(self.output_dir, self.fmt)
         self._proc = self._popen(
@@ -236,7 +236,7 @@ class Recorder:
         _init_thread_com()
         try:
             with warnings.catch_warnings():
-                # soundcard cảnh báo "data discontinuity" khi máy bận; không ảnh hưởng file.
+                # soundcard warns about "data discontinuity" when the machine is busy; the file is fine.
                 warnings.simplefilter("ignore")
                 with self._source_factory(self.device) as source:
                     for data in self._blocks(source):
@@ -250,7 +250,7 @@ class Recorder:
             self._stop_event.set()
 
     def stop(self, timeout: float = 15.0) -> Path:
-        """Dừng ghi, chờ ffmpeg ghi xong file; trả về đường dẫn file."""
+        """Stop recording, wait for ffmpeg to finish the file; return its path."""
         if self._thread is None or self.path is None:
             raise RuntimeError("Recorder chưa được bắt đầu")
         self._stop_event.set()

@@ -1,205 +1,207 @@
 # youtube-vault
 
-Công cụ dòng lệnh để tải video và audio từ **YouTube, Facebook, Instagram, X (Twitter), TikTok…** (hơn 1.000 trang mà yt-dlp hỗ trợ) về máy, xây dựng trên [yt-dlp](https://github.com/yt-dlp/yt-dlp).
+A command-line tool and desktop app for downloading video and audio from **YouTube, Facebook, Instagram, X (Twitter), TikTok…** (more than 1,000 sites supported by yt-dlp), built on [yt-dlp](https://github.com/yt-dlp/yt-dlp).
 
-- Tải video mp4 (tự ghép luồng video + audio), chọn độ phân giải từ `best`, 8K/4K, `1440` … `144`, hoặc **chọn từ danh sách độ phân giải mà video thực sự có**
-- Chỉ tải audio (`mp3`, `m4a`, `opus`, `wav`), chọn bitrate (`best`, `320` … `128` kbps), tự gắn tiêu đề/nghệ sĩ và ảnh bìa (thumbnail) vào file
-- Xem thông tin video/playlist mà không cần tải
-- Hỗ trợ URL playlist
-- **Facebook**: tải video/reel công khai ngay; video riêng tư, chỉ bạn bè hoặc trong nhóm thì dùng cookie đăng nhập (xem [Tải video Facebook](#tải-video-facebook))
-- **Instagram, X (Twitter), TikTok và nhiều trang khác**: dán link là tải; lệnh `sites` cho biết một trang có được hỗ trợ không (xem [Các trang khác](#các-trang-khác-instagram-x-tiktok))
-- Thanh tiến độ hiển thị bằng Rich
-- **Giao diện desktop** (Tkinter): dán nhiều URL, hàng đợi tải song song, tạm dừng/tiếp tục/hủy, tự thử lại khi lỗi
-- **Lịch sử tải** (SQLite): tự bỏ qua video đã tải, xem lại, mở thư mục chứa file
-- **Ghi âm âm thanh đang phát** (trình duyệt, livestream, trình phát web…) ra `mp3`/`m4a`/`opus`/`wav`, bằng CLI hoặc tab *Ghi âm* trên GUI
+> The app's interface (CLI help, GUI labels and messages) is in Vietnamese. This manual quotes those labels as they appear, with an English translation the first time.
 
-> Phần lõi (`downloader.py`, `download_queue.py`, `history.py`) không phụ thuộc giao diện. CLI và GUI đều dùng chung phần lõi này.
+- Download mp4 video (video and audio streams are merged automatically), choosing the resolution from `best`, 8K/4K, `1440` … `144`, or **from the list of resolutions the video actually has**
+- Download audio only (`mp3`, `m4a`, `opus`, `wav`), choose the bitrate (`best`, `320` … `128` kbps), and automatically embed title/artist and cover art (thumbnail) in the file
+- View video/playlist information without downloading
+- Playlist URLs are supported
+- **Facebook**: public videos/reels download directly; private, friends-only or group videos use login cookies (see [Downloading Facebook videos](#downloading-facebook-videos))
+- **Instagram, X (Twitter), TikTok and many other sites**: just paste the link; the `sites` command tells you whether a site is supported (see [Other sites](#other-sites-instagram-x-tiktok))
+- Progress bars rendered with Rich
+- **Desktop GUI** (Tkinter): paste many URLs, parallel download queue, pause/resume/cancel, automatic retry on errors
+- **Download history** (SQLite): skips videos that were already downloaded, lets you browse past downloads and open their folder
+- **Record audio playing on your computer** (browser, livestream, web player…) to `mp3`/`m4a`/`opus`/`wav`, from the CLI or the *Ghi âm* (Record) tab in the GUI
 
-## Yêu cầu
+> The core (`downloader.py`, `download_queue.py`, `history.py`, `recorder.py`) does not depend on any UI. The CLI and the GUI share the same core.
 
-- Python 3.11 trở lên
+## Requirements
+
+- Python 3.11 or newer
 - [uv](https://docs.astral.sh/uv/)
-- **ffmpeg**: cần cho việc ghép video + audio và chuyển đổi audio. Lệnh `info` không cần ffmpeg.
+- **ffmpeg**: needed to merge video + audio, convert audio, and encode recordings. The `info` command does not need ffmpeg.
 
-### Cài ffmpeg
+### Installing ffmpeg
 
-| Hệ điều hành | Lệnh |
+| OS | Command |
 |---|---|
-| Windows | `winget install Gyan.FFmpeg` (hoặc `choco install ffmpeg` / `scoop install ffmpeg`) |
+| Windows | `winget install Gyan.FFmpeg` (or `choco install ffmpeg` / `scoop install ffmpeg`) |
 | macOS | `brew install ffmpeg` |
 | Ubuntu/Debian | `sudo apt install ffmpeg` |
 | Fedora | `sudo dnf install ffmpeg` |
 | Arch | `sudo pacman -S ffmpeg` |
 
-Cài xong, mở lại terminal rồi kiểm tra bằng `ffmpeg -version`. Nếu chưa có ffmpeg, lệnh `video`/`audio` sẽ in hướng dẫn cài và dừng lại, không bị crash.
+After installing, reopen the terminal and check with `ffmpeg -version`. Without ffmpeg, the `video`/`audio` commands print installation instructions and stop; they do not crash.
 
-## Cài đặt
+## Installation
 
 ```bash
 uv sync
 ```
 
-## Cách dùng
+## Usage
 
 ```bash
-# Xem các lệnh
+# List the commands
 uv run youtube-vault --help
 
-# Xem thông tin (tiêu đề, thời lượng, định dạng và độ phân giải có sẵn)
+# Show information (title, duration, available formats and resolutions)
 uv run youtube-vault info "https://www.youtube.com/watch?v=jNQXAC9IVRw"
 
-# Tải video chất lượng tốt nhất
+# Download a video at the best quality
 uv run youtube-vault video "https://www.youtube.com/watch?v=jNQXAC9IVRw"
 
-# Tải video 720p vào thư mục khác
+# Download a video at 720p into another folder
 uv run youtube-vault video URL --quality 720 --out D:\Videos
 
-# Xem các độ phân giải video thực sự có rồi chọn số
+# Show the resolutions the video actually has, then pick a number
 uv run youtube-vault video URL --choose
 
-# Chỉ tải audio mp3 (mặc định) hoặc m4a
+# Audio only: mp3 (default) or m4a
 uv run youtube-vault audio URL
 uv run youtube-vault audio URL --format m4a
 
-# mp3 320 kbps; hoặc không gắn thông tin/ảnh bìa
+# mp3 at 320 kbps; or without embedded info/cover art
 uv run youtube-vault audio URL --bitrate 320
 uv run youtube-vault audio URL --no-embed
 
-# Tải cả playlist
+# Download a whole playlist
 uv run youtube-vault video "https://www.youtube.com/playlist?list=..."
 
-# Video / reel Facebook (công khai)
+# Facebook video / reel (public)
 uv run youtube-vault video "https://www.facebook.com/watch/?v=..."
 uv run youtube-vault audio "https://www.facebook.com/reel/..."
 
-# Video Facebook cần đăng nhập: dùng file cookie
+# Facebook video that requires login: use a cookies file
 uv run youtube-vault video "https://www.facebook.com/..." --cookies D:\cookies.txt
 
-# Instagram (reel/bài đăng) và X (x.com hoặc twitter.com)
+# Instagram (reel/post) and X (x.com or twitter.com)
 uv run youtube-vault video "https://www.instagram.com/reel/..."
-uv run youtube-vault audio "https://x.com/<tài khoản>/status/..."
+uv run youtube-vault audio "https://x.com/<account>/status/..."
 
-# Trang có được hỗ trợ không?
+# Is a site supported?
 uv run youtube-vault sites -s tiktok
 ```
 
-### Tùy chọn
+### Options
 
-| Lệnh | Tùy chọn | Mặc định | Giá trị |
+| Command | Option | Default | Values |
 |---|---|---|---|
-| `video` | `--quality`, `-q` | `best` | `best`, `4320`, `2160`, `1440`, `1080`, `720`, `480`, `360`, `240`, `144` hoặc số bất kỳ (`720p` cũng được) |
-| `video` | `--choose`, `-c` | tắt | hiện danh sách độ phân giải của video (kèm FPS, dung lượng ước tính) để chọn; chỉ dùng cho một video, không dùng cho playlist |
+| `video` | `--quality`, `-q` | `best` | `best`, `4320`, `2160`, `1440`, `1080`, `720`, `480`, `360`, `240`, `144` or any number (`720p` works too) |
+| `video` | `--choose`, `-c` | off | show the video's resolutions (with FPS and estimated size) and pick one; single videos only, not playlists |
 | `audio` | `--format`, `-f` | `mp3` | `mp3`, `m4a`, `opus`, `wav` |
-| `audio` | `--bitrate`, `-b` | `best` | `best` (VBR chất lượng cao nhất), `320`, `256`, `192`, `128` (kbps); không áp dụng cho `wav` |
-| `audio` | `--embed` / `--no-embed` | bật | gắn tiêu đề, nghệ sĩ, ngày đăng vào file; với `mp3`/`m4a` gắn thêm thumbnail làm ảnh bìa |
-| `video`, `audio` | `--out`, `-o` | `~/Downloads/youtube-vault/` | đường dẫn thư mục |
-| `video`, `audio` | `--force` | tắt | tải lại kể cả khi đã có trong lịch sử |
-| `video`, `audio`, `info` | `--cookies` | `~/.youtube-vault/cookies.txt` nếu có | file cookies.txt để đăng nhập (xem [Tải video Facebook](#tải-video-facebook)) |
-| `video`, `audio`, `info` | `--cookies-from-browser` | không dùng | `chrome`, `edge`, `firefox`, `brave`, `opera`, `vivaldi`, `chromium` (ổn định nhất với `firefox`) |
-| `sites` | `--search`, `-s` | tất cả | lọc danh sách trang được hỗ trợ theo tên, vd. `insta`, `twitter`, `tiktok` (không cần mạng) |
+| `audio` | `--bitrate`, `-b` | `best` | `best` (highest-quality VBR), `320`, `256`, `192`, `128` (kbps); ignored for `wav` |
+| `audio` | `--embed` / `--no-embed` | on | embed title, artist and upload date in the file; for `mp3`/`m4a` also embed the thumbnail as cover art |
+| `video`, `audio` | `--out`, `-o` | `~/Downloads/youtube-vault/` | folder path |
+| `video`, `audio` | `--force` | off | download again even if it is already in the history |
+| `video`, `audio`, `info` | `--cookies` | `~/.youtube-vault/cookies.txt` if it exists | cookies.txt file used to log in (see [Downloading Facebook videos](#downloading-facebook-videos)) |
+| `video`, `audio`, `info` | `--cookies-from-browser` | not used | `chrome`, `edge`, `firefox`, `brave`, `opera`, `vivaldi`, `chromium` (most reliable with `firefox`) |
+| `sites` | `--search`, `-s` | all | filter the list of supported sites by name, e.g. `insta`, `twitter`, `tiktok` (works offline) |
 
-**Cách chọn độ phân giải:** lấy mức lớn nhất không vượt quá mức đã chọn (vd. chọn `1440` mà video chỉ có tới 1080p thì tải 1080p). Nếu video không có mức nào thấp như vậy thì lấy mức nhỏ nhất có sẵn. Độ phân giải tính theo cạnh ngắn của khung hình, nên video dọc (Shorts, 1080×1920) và phim màn ảnh rộng 21:9 (1920×804) đều được tính là 1080p. Cùng độ phân giải thì ưu tiên mp4 + m4a.
+**How the resolution is chosen:** the largest resolution not above the one you asked for (e.g. asking for `1440` on a video that only goes up to 1080p downloads 1080p). If the video has nothing that low, the smallest available resolution is used. Resolution is measured on the short side of the frame, so vertical videos (Shorts, 1080×1920) and 21:9 widescreen films (1920×804) both count as 1080p. At equal resolution, mp4 + m4a is preferred.
 
-File được đặt tên theo mẫu `%(title).150B [%(id)s].%(ext)s`, ví dụ `Me at the zoo [jNQXAC9IVRw].mp4`. Tiêu đề dài (thường gặp ở Facebook, nơi tiêu đề là cả nội dung bài đăng) được cắt còn tối đa 150 byte.
+Files are named with the template `%(title).150B [%(id)s].%(ext)s`, e.g. `Me at the zoo [jNQXAC9IVRw].mp4`. Long titles (common on Facebook, where the title is the whole post text) are cut to at most 150 bytes.
 
-## Tải video Facebook
+## Downloading Facebook videos
 
-**Video/reel công khai** tải được ngay, giống YouTube: `video`, `audio`, `info`, *Xem độ phân giải* và nút *Tải MP3* đều dùng được. Facebook thường chỉ có 2 mức chất lượng (`sd`, `hd`); chọn `--quality` nào thì cũng lấy mức gần nhất có sẵn.
+**Public videos/reels** download directly, just like YouTube: `video`, `audio`, `info`, *Xem độ phân giải* (Show resolutions) and the *Tải MP3* (Download MP3) button all work. Facebook usually offers only 2 quality levels (`sd`, `hd`); whatever `--quality` you choose, the closest available one is used.
 
-**Video riêng tư, chỉ bạn bè, trong nhóm** (và một số reel) cần bạn đăng nhập. Chương trình dùng cookie của trình duyệt đang đăng nhập Facebook:
+**Private, friends-only and group videos** (and some reels) require you to be logged in. The app uses the cookies of a browser that is logged into Facebook:
 
-1. Mở Facebook trên trình duyệt và đăng nhập.
-2. Cài một tiện ích xuất cookie dạng `cookies.txt` (định dạng Netscape), ví dụ *Get cookies.txt LOCALLY*, rồi xuất cookie khi đang ở trang facebook.com.
-3. Lưu file thành `~/.youtube-vault/cookies.txt` (Windows: `C:\Users\<tên>\.youtube-vault\cookies.txt`). File này **được dùng tự động** cho CLI và được chọn sẵn trên GUI. Hoặc để file ở chỗ khác và dùng `--cookies <đường dẫn>`.
+1. Open Facebook in your browser and log in.
+2. Install an extension that exports cookies as `cookies.txt` (Netscape format), e.g. *Get cookies.txt LOCALLY*, and export the cookies while on facebook.com.
+3. Save the file as `~/.youtube-vault/cookies.txt` (Windows: `C:\Users\<name>\.youtube-vault\cookies.txt`). This file is **used automatically** by the CLI and preselected in the GUI. Or keep the file elsewhere and pass `--cookies <path>`.
 
-Trên **Chrome/Edge (Windows)**, `--cookies-from-browser chrome` thường **không dùng được**: bản mới mã hóa cookie theo ứng dụng và khóa file cookie khi trình duyệt đang mở. Vì vậy nên dùng file `cookies.txt` như trên. Với **Firefox**, `--cookies-from-browser firefox` đọc trực tiếp được, không cần xuất file.
+On **Chrome/Edge (Windows)**, `--cookies-from-browser chrome` usually **does not work**: recent versions encrypt cookies per application and lock the cookie file while the browser is open. That is why the `cookies.txt` file above is recommended. With **Firefox**, `--cookies-from-browser firefox` reads the cookies directly, no export needed.
 
-Khi video cần đăng nhập mà chưa có cookie, hoặc không đọc được cookie từ trình duyệt, chương trình báo lỗi kèm gợi ý cách khắc phục.
+When a video needs login and no cookies are available, or the browser's cookies cannot be read, the app shows the error together with a hint on how to fix it.
 
-> ⚠️ **Bảo mật:** file `cookies.txt` chứa phiên đăng nhập Facebook của bạn, ai có file này có thể đăng nhập tài khoản của bạn. Không chia sẻ, không đưa lên Git/cloud. Khi cookie hết hạn (lỗi đăng nhập quay lại), hãy xuất lại file. Muốn ngừng dùng thì xóa file đi. Chương trình không lưu nội dung cookie vào lịch sử.
+> ⚠️ **Security:** `cookies.txt` contains your logged-in Facebook session; anyone with this file can log into your account. Do not share it or upload it to Git/the cloud. When the cookies expire (login errors come back), export the file again. To stop using it, delete the file. The app never stores cookie contents in the history.
 
-Chỉ tải nội dung bạn có quyền sử dụng; tôn trọng bản quyền và điều khoản của Facebook.
+Only download content you have the right to use; respect copyright and Facebook's terms.
 
-## Các trang khác (Instagram, X, TikTok…)
+## Other sites (Instagram, X, TikTok…)
 
-Chương trình không giới hạn ở YouTube/Facebook: mọi link được chuyển cho yt-dlp, vốn hỗ trợ hơn 1.000 trang. Kiểm tra một trang bằng `youtube-vault sites -s <tên>` (vd. `sites -s insta`). Trang không có trong danh sách vẫn có thể tải được nếu link trỏ thẳng tới file video (`.mp4`, `.m3u8`).
+The app is not limited to YouTube/Facebook: every link is handed to yt-dlp, which supports more than 1,000 sites. Check a site with `youtube-vault sites -s <name>` (e.g. `sites -s insta`). A site that is not in the list may still work if the link points straight at a video file (`.mp4`, `.m3u8`).
 
-- **Instagram:** dán link reel (`instagram.com/reel/...`) hoặc bài đăng (`instagram.com/p/...`). Bài đăng có nhiều video được tải như một playlist (mỗi video một file). Tiêu đề thường là "Video by <tài khoản>", nên tên file luôn kèm mã bài để không trùng. Instagram hay giới hạn người chưa đăng nhập (lỗi *rate-limit* / *login required*): khi đó dùng cookie như ở mục Facebook, nhưng xuất cookie khi đang ở trang instagram.com.
-- **X (Twitter):** dán link bài đăng, `x.com/...` hay `twitter.com/...` đều được. Bài nhạy cảm (NSFW), tài khoản khóa hoặc giới hạn tuổi cần cookie đăng nhập (xuất khi đang ở x.com).
-- **Dùng chung một file cookie cho nhiều trang:** xuất cookie lần lượt ở facebook.com, instagram.com, x.com… rồi dán nối nội dung các file vào cùng `~/.youtube-vault/cookies.txt` (định dạng Netscape cho phép nối như vậy). Lưu ý bảo mật ở mục Facebook áp dụng cho mọi trang.
-- Video **không có âm thanh** (một số reel Instagram) thì *Chỉ audio*/*Tải MP3* báo lỗi "Video này không có âm thanh…" ngay, không thử lại; tải dạng video vẫn được.
-- Khi trang cần đăng nhập, lỗi hiển thị kèm tên trang và gợi ý dùng cookie.
-- Trang nào **không tải được** (trình phát nhúng lạ, luồng trực tiếp không có link), hãy dùng [Ghi âm âm thanh đang phát](#ghi-âm-âm-thanh-đang-phát) để ghi lại phần âm thanh.
+- **Instagram:** paste a reel link (`instagram.com/reel/...`) or a post link (`instagram.com/p/...`). A post with several videos is downloaded like a playlist (one file per video). Titles are usually "Video by <account>", so file names always include the post ID to stay unique. Instagram often limits users who are not logged in (*rate-limit* / *login required* errors): in that case use cookies as described in the Facebook section, but export them while on instagram.com.
+- **X (Twitter):** paste the post link; both `x.com/...` and `twitter.com/...` work. Sensitive (NSFW) posts, protected accounts and age-restricted posts need login cookies (exported while on x.com).
+- **One cookies file for several sites:** export cookies on facebook.com, instagram.com, x.com… one after another, then paste the contents of those files into the same `~/.youtube-vault/cookies.txt` (the Netscape format allows concatenating them like this). The security note in the Facebook section applies to every site.
+- For videos **without sound** (some Instagram reels), *Chỉ audio* (Audio only) / *Tải MP3* fails immediately with "Video này không có âm thanh…" (this video has no sound) and is not retried; downloading it as video still works.
+- When a site requires login, the error names the site and suggests using cookies.
+- If a site **cannot be downloaded** (unusual embedded player, live stream without a link), use [Recording audio playing on your computer](#recording-audio-playing-on-your-computer) to capture the sound.
 
-## Giao diện desktop (GUI)
+## Desktop GUI
 
 ```bash
 uv run youtube-vault gui
-# hoặc dùng lối tắt không kèm cửa sổ console (sau khi `uv sync`):
+# or use the launcher without a console window (after `uv sync`):
 .venv\Scripts\youtube-vault-gui.exe        # Windows
 .venv/bin/youtube-vault-gui                # macOS/Linux
 ```
 
-- **Thêm tải xuống:** dán một hoặc nhiều link (mỗi dòng một link, có thể là playlist), chọn Video/Audio, chất lượng hoặc định dạng, thư mục lưu, rồi bấm *Thêm vào hàng đợi*.
-  - *Xem độ phân giải*: lấy danh sách độ phân giải mà video (link đầu tiên) thực sự có, kèm dung lượng ước tính, rồi hiện trong ô *Chất lượng* để chọn. Với playlist thì giữ danh sách chuẩn. Sau khi thêm vào hàng đợi, ô *Chất lượng* trở lại danh sách chuẩn.
-  - *Bitrate audio* và *Gắn thông tin + ảnh bìa*: áp dụng cho mục audio (bitrate bị khóa khi chọn `wav`).
-  - *Tải MP3*: bấm một lần là thêm các link vào hàng đợi dưới dạng audio mp3, dù đang chọn Video hay định dạng audio khác (dùng bitrate và tùy chọn ảnh bìa đang chọn).
-  - *Cookie đăng nhập*: *Không dùng*, *File cookies.txt* (bấm *Chọn…* để chọn file) hoặc lấy từ một trình duyệt. Cần cho video Facebook riêng tư/nhóm. Nếu đã có `~/.youtube-vault/cookies.txt` thì file này được chọn sẵn.
-- **Tab Hàng đợi:** xem tiến độ, tốc độ, thời gian còn lại của từng mục.
-  - *Số luồng* (1–5): số video tải cùng lúc, đổi được ngay khi đang tải.
-  - *Tạm dừng*: dừng tải nhưng giữ file `.part`; *Tiếp tục* sẽ tải nối tiếp từ chỗ dừng.
-  - *Hủy*: dừng tải và xóa file tạm `.part`.
-  - Lỗi mạng được tự thử lại tối đa 2 lần (chờ 2 giây, rồi 5 giây). Lỗi như thiếu ffmpeg thì không thử lại. Mục bị lỗi có thể bấm *Thử lại* bằng tay.
-  - Double-click một mục để mở thư mục chứa file.
-- **Tab Lịch sử:** tìm theo tiêu đề, mở thư mục chứa file, xóa mục khỏi lịch sử (file đã tải vẫn được giữ).
-- **Tab Ghi âm:** chọn loa, định dạng, bitrate rồi bấm *● Bắt đầu ghi*; bấm *■ Dừng & lưu* để lưu file vào thư mục ở ô *Lưu vào*. Có đồng hồ thời gian và thanh độ to. Xem thêm mục [Ghi âm âm thanh đang phát](#ghi-âm-âm-thanh-đang-phát).
-- Khi đóng cửa sổ, các mục đang tải được tạm dừng và giữ file `.part`; nếu đang ghi âm thì file ghi âm được lưu lại.
+- **Thêm tải xuống (Add downloads):** paste one or more links (one per line, playlists allowed), choose Video/Audio, the quality or format and the output folder, then click *Thêm vào hàng đợi* (Add to queue).
+  - *Xem độ phân giải* (Show resolutions): fetches the resolutions the video (first link) actually has, with estimated sizes, and shows them in the *Chất lượng* (Quality) box. For playlists the standard list is kept. After adding to the queue, the *Chất lượng* box goes back to the standard list.
+  - *Bitrate audio* and *Gắn thông tin + ảnh bìa* (Embed info + cover art): apply to audio items (the bitrate is disabled when `wav` is selected).
+  - *Tải MP3* (Download MP3): one click adds the links to the queue as mp3 audio, whether Video or another audio format is selected (it uses the current bitrate and cover-art settings).
+  - *Cookie đăng nhập* (Login cookies): *Không dùng* (None), *File cookies.txt* (click *Chọn…* (Browse…) to pick the file) or cookies from a browser. Needed for private/group Facebook videos and similar. If `~/.youtube-vault/cookies.txt` exists, it is preselected.
+- **Hàng đợi (Queue) tab:** shows the progress, speed and remaining time of each item.
+  - *Số luồng* (Threads, 1–5): how many videos download at once; can be changed while downloading.
+  - *Tạm dừng* (Pause): stops downloading but keeps the `.part` file; *Tiếp tục* (Resume) continues from where it stopped.
+  - *Hủy* (Cancel): stops downloading and deletes the temporary `.part` file.
+  - Network errors are retried automatically up to 2 times (waiting 2 seconds, then 5 seconds). Errors such as missing ffmpeg are not retried. Failed items can be retried manually with *Thử lại* (Retry).
+  - Double-click an item to open its folder.
+- **Lịch sử (History) tab:** search by title, open the file's folder, remove entries from the history (downloaded files are kept).
+- **Ghi âm (Record) tab:** pick the speaker, format and bitrate, then click *● Bắt đầu ghi* (Start recording); click *■ Dừng & lưu* (Stop & save) to save the file into the folder in the *Lưu vào* (Save to) box. Shows a timer and a volume meter. See [Recording audio playing on your computer](#recording-audio-playing-on-your-computer).
+- When the window is closed, running downloads are paused and keep their `.part` files; an active recording is saved.
 
-> Lưu ý: bước ghép video/audio bằng ffmpeg không ngắt được giữa chừng, nên lệnh tạm dừng/hủy chỉ có hiệu lực sau bước đó.
+> Note: the ffmpeg video/audio merge step cannot be interrupted, so pause/cancel only take effect after it.
 
-## Ghi âm âm thanh đang phát
+## Recording audio playing on your computer
 
-Dùng khi muốn lấy âm thanh từ trình duyệt mà không tải được bằng link (livestream, trang web không được yt-dlp hỗ trợ, trình phát nhúng…). Chương trình ghi lại **âm thanh phát ra loa** (WASAPI loopback trên Windows, monitor của PulseAudio trên Linux) rồi mã hóa bằng ffmpeg.
+Use this to capture audio from the browser that cannot be downloaded through a link (livestreams, sites yt-dlp does not support, embedded players…). The app records **the sound going to your speakers** (WASAPI loopback on Windows, the PulseAudio monitor on Linux) and encodes it with ffmpeg.
 
 ```bash
-# Liệt kê các loa ghi được
+# List the speakers that can be recorded
 uv run youtube-vault record --list-devices
 
-# Ghi tới khi bấm Ctrl+C (mặc định mp3, chất lượng cao nhất)
+# Record until Ctrl+C is pressed (mp3 by default, best quality)
 uv run youtube-vault record
 
-# Ghi 90 giây, m4a 192 kbps, từ một loa cụ thể
+# Record 90 seconds, m4a at 192 kbps, from a specific speaker
 uv run youtube-vault record -t 90 -f m4a -b 192 -d "Speakers (Realtek High Definition Audio)"
 ```
 
-| Tùy chọn | Mặc định | Giá trị |
+| Option | Default | Values |
 |---|---|---|
 | `--format`, `-f` | `mp3` | `mp3`, `m4a`, `opus`, `wav` |
-| `--bitrate`, `-b` | `best` | `best`, `320`, `256`, `192`, `128` (kbps); không áp dụng cho `wav` |
-| `--device`, `-d` | loa mặc định | tên loa (xem `--list-devices`) |
-| `--duration`, `-t` | không giới hạn | số giây, hết thì tự dừng và lưu |
-| `--out`, `-o` | `~/Downloads/youtube-vault/` | thư mục lưu |
+| `--bitrate`, `-b` | `best` | `best`, `320`, `256`, `192`, `128` (kbps); ignored for `wav` |
+| `--device`, `-d` | default speaker | speaker name (see `--list-devices`) |
+| `--duration`, `-t` | unlimited | number of seconds; stops and saves automatically when reached |
+| `--out`, `-o` | `~/Downloads/youtube-vault/` | output folder |
 
-File được đặt tên theo thời điểm bắt đầu ghi, ví dụ `Ghi âm 2026-11-21 09-05-07.mp3`. File ghi âm không được đưa vào lịch sử tải.
+Files are named after the time recording started, e.g. `Ghi âm 2026-11-21 09-05-07.mp3` ("Ghi âm" = "Recording"). Recordings are not added to the download history.
 
-Lưu ý:
-- Ghi **toàn bộ** âm thanh của máy (cả âm báo của ứng dụng khác), không riêng một tab. Nên tắt âm thanh khác khi ghi.
-- Hỗ trợ Windows và Linux. macOS không ghi được âm thanh hệ thống sẵn, cần cài thiết bị ảo như [BlackHole](https://github.com/ExistentialAudio/BlackHole).
-- Chỉ ghi nội dung mà bạn có quyền sử dụng; tôn trọng bản quyền và điều khoản của trang web.
+Notes:
+- It records **all** of the computer's sound (including notification sounds from other apps), not a single tab. Mute other sounds while recording.
+- Supported on Windows and Linux. macOS cannot record system audio out of the box; install a virtual device such as [BlackHole](https://github.com/ExistentialAudio/BlackHole).
+- Only record content you have the right to use; respect copyright and the website's terms.
 
-## Lịch sử tải
+## Download history
 
-Mỗi file tải xong được ghi vào `~/.youtube-vault/history.db` (SQLite), dùng chung cho cả CLI và GUI. Video đã tải sẽ được bỏ qua ở lần sau (dựa trên cơ chế `download_archive` của yt-dlp). Video và audio được tính riêng: đã tải video thì vẫn tải audio được. Muốn tải lại thì thêm `--force`, hoặc tick ô *Tải lại kể cả đã có trong lịch sử* trên GUI.
+Every finished file is recorded in `~/.youtube-vault/history.db` (SQLite), shared by the CLI and the GUI. Videos that were already downloaded are skipped next time (based on yt-dlp's `download_archive` mechanism). Video and audio are tracked separately: having downloaded the video does not prevent downloading the audio. To download again, add `--force`, or tick *Tải lại kể cả đã có trong lịch sử* (Download again even if in history) in the GUI.
 
 ```bash
-uv run youtube-vault history list               # 20 mục gần nhất
-uv run youtube-vault history list -n 50 -s zoo  # tìm theo tiêu đề/URL
-uv run youtube-vault history open 3             # mở thư mục chứa file của mục ID 3
-uv run youtube-vault history remove 3           # xóa mục khỏi lịch sử (không xóa file)
-uv run youtube-vault history clear --yes        # xóa toàn bộ lịch sử
+uv run youtube-vault history list               # 20 most recent entries
+uv run youtube-vault history list -n 50 -s zoo  # search by title/URL
+uv run youtube-vault history open 3             # open the folder of entry ID 3
+uv run youtube-vault history remove 3           # remove the entry from history (keeps the file)
+uv run youtube-vault history clear --yes        # clear the whole history
 ```
 
-## Dùng như thư viện
+## Using it as a library
 
 ```python
 from youtube_vault.downloader import download_video, get_info, list_resolutions
@@ -208,45 +210,45 @@ from youtube_vault.history import History
 
 info = get_info("https://www.youtube.com/watch?v=jNQXAC9IVRw")
 print(info.title, info.duration)
-print([r.label for r in list_resolutions(info)])  # vd. ['240p', '144p']
+print([r.label for r in list_resolutions(info)])  # e.g. ['240p', '144p']
 
 def on_progress(event):
     print(event.status, event.title, event.percent)
 
-# Tải một video, ghi lịch sử, bỏ qua nếu đã tải rồi
+# Download one video, record it in the history, skip it if already downloaded
 download_video(info.url, quality="720", progress_callback=on_progress, history=History())
 
-# Hàng đợi: 3 luồng song song
+# Queue: 3 parallel workers
 queue = DownloadQueue(max_workers=3, history=History(), on_update=lambda item: print(item.status))
 item = queue.add("https://www.youtube.com/watch?v=jNQXAC9IVRw", kind="audio", audio_format="mp3",
                  audio_quality="320", embed_metadata=True)
 queue.pause(item.id); queue.resume(item.id)
 
-# Ghi âm âm thanh đang phát trong 10 giây
+# Record the audio playing on the computer for 10 seconds
 import time
 from youtube_vault.recorder import Recorder
 
 rec = Recorder("~/Music", fmt="mp3", audio_quality="192")
 rec.start(); time.sleep(10)
-print(rec.stop())  # đường dẫn file đã lưu
+print(rec.stop())  # path of the saved file
 ```
 
-## Cấu trúc
+## Project structure
 
 ```
 src/youtube_vault/
-├── config.py          # thư mục lưu, mẫu tên file, preset chất lượng, cấu hình hàng đợi
-├── downloader.py      # logic tải, gói yt-dlp, không phụ thuộc giao diện
-├── history.py         # lịch sử SQLite + nối vào yt-dlp (download_archive, postprocessor)
-├── download_queue.py  # hàng đợi: đa luồng, tạm dừng/tiếp tục/hủy, tự thử lại
-├── recorder.py        # ghi âm thanh đang phát ra loa (soundcard + ffmpeg)
-├── platform_utils.py  # mở thư mục chứa file theo từng hệ điều hành
-├── cli.py             # CLI bằng Typer + Rich
-└── gui.py             # giao diện desktop bằng Tkinter
-tests/                 # unit test, yt-dlp được mock (không tải thật)
+├── config.py          # output folder, filename template, quality presets, queue settings
+├── downloader.py      # download logic wrapping yt-dlp, UI-independent
+├── history.py         # SQLite history + yt-dlp glue (download_archive, postprocessor)
+├── download_queue.py  # queue: multi-threaded, pause/resume/cancel, automatic retry
+├── recorder.py        # records the audio playing on the speakers (soundcard + ffmpeg)
+├── platform_utils.py  # opens a file's folder on each OS
+├── cli.py             # CLI built with Typer + Rich
+└── gui.py             # desktop GUI built with Tkinter
+tests/                 # unit tests; yt-dlp is mocked (nothing is really downloaded)
 ```
 
-## Chạy test
+## Running the tests
 
 ```bash
 uv run pytest

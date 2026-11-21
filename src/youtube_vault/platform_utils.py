@@ -1,4 +1,4 @@
-"""Tiện ích theo hệ điều hành: mở thư mục chứa file bằng trình quản lý file."""
+"""OS helpers: open a file's folder in the system file manager."""
 
 from __future__ import annotations
 
@@ -9,9 +9,9 @@ from pathlib import Path
 
 
 def open_folder(path: Path | str, select: bool = True) -> None:
-    """Mở thư mục chứa ``path``; nếu ``path`` là file và ``select`` thì chọn sẵn file đó.
+    """Open the folder containing ``path``; if ``path`` is a file and ``select`` is set, select it.
 
-    Ném ``FileNotFoundError`` nếu cả file lẫn thư mục cha đều không tồn tại.
+    Raises ``FileNotFoundError`` if neither the file nor its parent folder exists.
     """
     target = Path(path).expanduser()
     is_file = target.is_file()

@@ -1,8 +1,10 @@
-"""Giao diện desktop (Tkinter + ttk): hàng đợi tải và lịch sử tải.
+"""Desktop GUI (Tkinter + ttk): download queue, history and recording.
 
-Mọi việc tải chạy trong ``DownloadQueue`` (luồng nền). Luồng nền chỉ đẩy id của
-item vào một ``SimpleQueue``; luồng chính của Tk đọc ra định kỳ (``after``) và
-cập nhật giao diện, vì Tkinter không an toàn khi gọi từ luồng khác.
+All downloads run in ``DownloadQueue`` (background threads). Those threads only push
+item ids into a ``SimpleQueue``; the Tk main thread drains it periodically (``after``)
+and updates the widgets, because Tkinter is not safe to call from other threads.
+
+All labels and messages shown to the user are Vietnamese.
 """
 
 from __future__ import annotations
@@ -61,7 +63,7 @@ RECORD_START_TEXT = "● Bắt đầu ghi"
 RECORD_STOP_TEXT = "■ Dừng & lưu"
 COOKIES_NONE_LABEL = "Không dùng"
 COOKIES_FILE_LABEL = "File cookies.txt"
-# Nhãn -> tên trình duyệt cho yt-dlp, vd. "Trình duyệt: firefox" -> "firefox".
+# Label -> browser name for yt-dlp, e.g. "Trình duyệt: firefox" -> "firefox".
 COOKIES_BROWSER_LABELS: dict[str, str] = {f"Trình duyệt: {b}": b for b in COOKIES_BROWSERS}
 
 STATUS_LABELS: dict[ItemStatus, str] = {
@@ -92,12 +94,12 @@ HISTORY_COLUMNS = (
 
 
 # --------------------------------------------------------------------------- #
-# Hàm thuần (dễ test, không cần Tk)
+# Pure helpers (easy to test, no Tk needed)
 # --------------------------------------------------------------------------- #
 def parse_urls(text: str) -> tuple[list[str], list[str]]:
-    """Tách URL từ ô nhập (mỗi dòng/khoảng trắng một link).
+    """Split URLs from the input box (one link per line/whitespace).
 
-    Trả về ``(hợp_lệ, không_hợp_lệ)``; bỏ trùng, giữ thứ tự, bỏ dòng ``#``.
+    Returns ``(valid, invalid)``; deduplicated, order kept, ``#`` lines skipped.
     """
     valid: list[str] = []
     invalid: list[str] = []
@@ -125,10 +127,10 @@ def _format_size(n: float | None) -> str:
 def quality_choices(
     resolutions: list[ResolutionOption] | None = None,
 ) -> list[tuple[str, str]]:
-    """Các lựa chọn ``(nhãn, giá_trị_chất_lượng)`` cho ô "Chất lượng".
+    """``(label, quality_value)`` choices for the "Chất lượng" (Quality) box.
 
-    - ``None``: danh sách chuẩn ("Tốt nhất", 4320p (8K), ..., 144p).
-    - Danh sách độ phân giải thực của một video: nhãn kèm dung lượng ước tính.
+    - ``None``: the standard list ("Tốt nhất", 4320p (8K), ..., 144p).
+    - A video's real resolutions: labels include the estimated size.
     """
     if resolutions is None:
         return [
@@ -143,7 +145,7 @@ def quality_choices(
 
 
 def bitrate_choices() -> list[tuple[str, str]]:
-    """Các lựa chọn ``(nhãn, giá_trị)`` cho ô "Bitrate" (vd. ``("320 kbps", "320")``)."""
+    """``(label, value)`` choices for the "Bitrate" box (e.g. ``("320 kbps", "320")``)."""
     return [
         (BEST_BITRATE_LABEL if q == "best" else f"{q} kbps", q) for q in AUDIO_QUALITIES
     ]
@@ -162,7 +164,7 @@ def _format_eta(seconds: int | None) -> str:
 
 
 def format_elapsed(seconds: float) -> str:
-    """Thời lượng ghi âm dạng ``MM:SS`` (hoặc ``H:MM:SS``)."""
+    """Recording duration as ``MM:SS`` (or ``H:MM:SS``)."""
     m, s = divmod(int(seconds), 60)
     h, m = divmod(m, 60)
     return f"{h}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
@@ -177,7 +179,7 @@ def item_percent(item: DownloadItem) -> float:
 
 
 def format_row(item: DownloadItem, max_retries: int | None = None) -> tuple[str, ...]:
-    """Một dòng của bảng hàng đợi."""
+    """One row of the queue table."""
     if item.kind == "video":
         kind = f"Video {item.quality}"
     else:
@@ -208,7 +210,7 @@ def format_row(item: DownloadItem, max_retries: int | None = None) -> tuple[str,
 
 
 # --------------------------------------------------------------------------- #
-# Ứng dụng
+# Application
 # --------------------------------------------------------------------------- #
 class App(ttk.Frame):
     POLL_MS = 100
@@ -225,7 +227,7 @@ class App(ttk.Frame):
     ) -> None:
         super().__init__(master, padding=10)
         self.root = master
-        # Ghi âm: hai hàm có thể thay khi test (không đụng tới loa thật).
+        # Recording: both callables can be swapped in tests (no real speaker).
         self._recorder_factory = recorder_factory or recorder_mod.Recorder
         self._list_devices = list_devices or recorder_mod.list_output_devices
         self.recorder: Recorder | None = None
@@ -234,7 +236,7 @@ class App(ttk.Frame):
         self.last_record_path: Path | None = None
         self.history = history if history is not None else self._open_history()
         self._updates: SimpleQueue[int] = SimpleQueue()
-        # Việc cần chạy trên luồng Tk, do luồng nền gửi sang (đọc ra trong ``_poll``).
+        # Work to run on the Tk thread, sent by background threads (drained in ``_poll``).
         self._ui_calls: SimpleQueue[Callable[[], None]] = SimpleQueue()
         self._quality_map: dict[str, str] = {}
         self.queue = download_queue or DownloadQueue(history=self.history)
@@ -250,7 +252,7 @@ class App(ttk.Frame):
         if check_ffmpeg and not is_ffmpeg_available():
             self.after(300, self._warn_ffmpeg)
 
-    # ---------------------------- dựng giao diện -------------------------- #
+    # ------------------------------ building ----------------------------- #
     def _build_input(self) -> None:
         box = ttk.LabelFrame(self, text="Thêm tải xuống", padding=8)
         box.pack(fill="x")
@@ -274,7 +276,7 @@ class App(ttk.Frame):
                         command=self._on_kind_change).pack(side="left", padx=(8, 16))
         self.option_label = ttk.Label(opts, text="Chất lượng:")
         self.option_label.pack(side="left")
-        self.quality_var = tk.StringVar()  # giữ NHÃN đang chọn; giá trị qua _quality_map
+        self.quality_var = tk.StringVar()  # holds the selected LABEL; value via _quality_map
         self.audio_var = tk.StringVar(value=DEFAULT_AUDIO_FORMAT)
         self.option_combo = ttk.Combobox(opts, width=20, state="readonly",
                                          textvariable=self.quality_var)
@@ -288,8 +290,8 @@ class App(ttk.Frame):
         ttk.Checkbutton(opts, text="Tải lại kể cả đã có trong lịch sử",
                         variable=self.force_var).pack(side="left")
 
-        # Tùy chọn riêng cho audio (bitrate, gắn thông tin/ảnh bìa): dùng cho "Chỉ audio"
-        # và nút "Tải MP3"; luôn hiện vì nút "Tải MP3" bấm được ở cả chế độ video.
+        # Audio-only options (bitrate, metadata/cover art): used by "Chỉ audio" (Audio only)
+        # and the "Tải MP3" button; always shown because "Tải MP3" also works in video mode.
         audio_opts = ttk.Frame(box)
         audio_opts.grid(row=2, column=1, columnspan=4, sticky="w", pady=(6, 0))
         ttk.Label(audio_opts, text="Bitrate audio:").pack(side="left")
@@ -319,7 +321,7 @@ class App(ttk.Frame):
         self.mp3_button = ttk.Button(box, text="Tải MP3", command=self.add_mp3_from_input)
         self.mp3_button.grid(row=4, column=4, padx=(6, 0), pady=(6, 0))
 
-        # Cookie đăng nhập: cần cho video Facebook riêng tư/nhóm...
+        # Login cookies: needed for private/group Facebook videos...
         ttk.Label(box, text="Cookie đăng nhập:").grid(row=5, column=0, sticky="w", pady=(6, 0))
         cookie_row = ttk.Frame(box)
         cookie_row.grid(row=5, column=1, sticky="ew", pady=(6, 0))
@@ -477,17 +479,17 @@ class App(ttk.Frame):
                                              command=self.open_last_record)
         self.record_open_button.grid(row=6, column=0, sticky="w", pady=(6, 0))
 
-    # ------------------------------- ghi âm ------------------------------- #
+    # ------------------------------ recording ---------------------------- #
     def _on_tab_changed(self) -> None:
         if self.notebook.select() == str(self.record_tab) and not self._devices_loaded:
             self.refresh_devices()
 
     def refresh_devices(self) -> None:
-        """Lấy danh sách loa ở luồng nền (lần đầu nạp thư viện âm thanh có thể hơi lâu)."""
+        """Load the speaker list on a background thread (loading the audio library can be slow)."""
         self._devices_loaded = True
         self.device_status_var.set("")
 
-        def work() -> None:  # luồng nền: chỉ gửi kết quả qua _ui_calls
+        def work() -> None:  # background thread: only send results through _ui_calls
             try:
                 names = self._list_devices()
             except Exception as exc:
@@ -537,7 +539,7 @@ class App(ttk.Frame):
         self.record_status_var.set(f"Đang ghi vào: {path}")
 
     def stop_recording(self) -> None:
-        """Dừng ghi; ffmpeg lưu file ở luồng nền rồi báo lại qua ``_ui_calls``."""
+        """Stop recording; ffmpeg saves the file on a background thread and reports via ``_ui_calls``."""
         rec = self.recorder
         if rec is None or self._record_stopping:
             return
@@ -574,14 +576,14 @@ class App(ttk.Frame):
             return
         self.record_time_var.set(format_elapsed(rec.elapsed))
         self.record_level["value"] = rec.level * 100
-        if rec.error is not None:  # thiết bị lỗi giữa chừng -> dừng, báo lỗi qua stop()
+        if rec.error is not None:  # device failed midway -> stop; stop() reports the error
             self.stop_recording()
 
     def open_last_record(self) -> None:
         if self.last_record_path is not None:
             self._open(self.last_record_path)
 
-    # ------------------------------ nhập liệu ----------------------------- #
+    # -------------------------------- input ------------------------------ #
     def _on_kind_change(self) -> None:
         if self.kind_var.get() == "audio":
             self.option_label.configure(text="Định dạng:")
@@ -595,20 +597,20 @@ class App(ttk.Frame):
         self._update_audio_options()
 
     def _update_audio_options(self) -> None:
-        """wav không có bitrate -> khóa ô "Bitrate" khi đang chọn audio wav."""
+        """wav has no bitrate -> disable the "Bitrate" box while audio wav is selected."""
         is_wav = self.kind_var.get() == "audio" and self.audio_var.get() == "wav"
         self.bitrate_combo.configure(state="disabled" if is_wav else "readonly")
 
     def selected_bitrate(self) -> str:
-        """Giá trị bitrate ("best", "320"...) ứng với nhãn đang chọn."""
+        """Bitrate value ("best", "320"...) for the selected label."""
         return self._bitrate_map.get(self.bitrate_var.get(), DEFAULT_AUDIO_QUALITY)
 
     def selected_quality(self) -> str:
-        """Giá trị chất lượng ("best", "1080"...) ứng với nhãn đang chọn."""
+        """Quality value ("best", "1080"...) for the selected label."""
         return self._quality_map.get(self.quality_var.get(), DEFAULT_QUALITY)
 
     def _set_quality_choices(self, choices: list[tuple[str, str]], select: str) -> None:
-        """Đổi danh sách trong ô "Chất lượng" và chọn mục có giá trị ``select`` (nếu có)."""
+        """Replace the "Chất lượng" (Quality) list and select the entry whose value is ``select``."""
         self._quality_map = dict(choices)
         label = next((lbl for lbl, value in choices if value == select), choices[0][0])
         self.quality_var.set(label)
@@ -616,7 +618,7 @@ class App(ttk.Frame):
             self.option_combo.configure(values=list(self._quality_map))
 
     def fetch_resolutions(self) -> None:
-        """Lấy các độ phân giải thực của video đầu tiên trong ô URL (chạy ở luồng nền)."""
+        """Fetch the real resolutions of the first video in the URL box (on a background thread)."""
         urls, _ = parse_urls(self.url_text.get("1.0", "end"))
         if not urls:
             messagebox.showinfo("Chưa có URL", "Hãy dán link video cần xem độ phân giải.",
@@ -632,7 +634,7 @@ class App(ttk.Frame):
         self.res_button.configure(state="disabled")
         self.res_status_var.set("Đang lấy độ phân giải…")
 
-        def work() -> None:  # luồng nền: KHÔNG đụng vào widget, chỉ gửi kết quả qua _ui_calls
+        def work() -> None:  # background thread: NEVER touch widgets, only send results via _ui_calls
             try:
                 media = downloader.get_info(url, cookies=cookies)
                 options = downloader.list_resolutions(media)
@@ -647,7 +649,7 @@ class App(ttk.Frame):
     def _on_resolutions_loaded(
         self, url: str, media: MediaInfo, options: list[ResolutionOption], note: str
     ) -> None:
-        self._on_kind_change()  # bật lại nút (nếu đang ở chế độ video)
+        self._on_kind_change()  # re-enable the button (if in video mode)
         if not options:
             reason = "Playlist" if media.is_playlist else "Không có thông tin độ phân giải"
             self._set_quality_choices(quality_choices(), select=self.selected_quality())
@@ -682,7 +684,7 @@ class App(ttk.Frame):
         self.cookies_entry.configure(state=state)
 
     def selected_cookies(self) -> Cookies | None:
-        """Nguồn cookie đang chọn. Ném ``ValueError`` nếu file không tồn tại."""
+        """Selected cookie source. Raises ``ValueError`` if the file does not exist."""
         mode = self.cookies_mode_var.get()
         if mode == COOKIES_FILE_LABEL:
             path = self.cookies_file_var.get().strip()
@@ -694,11 +696,11 @@ class App(ttk.Frame):
         return None
 
     def add_from_input(self) -> list[DownloadItem]:
-        """Nút "Thêm vào hàng đợi": dùng loại/định dạng đang chọn."""
+        """The "Thêm vào hàng đợi" (Add to queue) button: uses the selected kind/format."""
         return self._add_urls(self.kind_var.get(), self.audio_var.get())
 
     def add_mp3_from_input(self) -> list[DownloadItem]:
-        """Nút "Tải MP3": luôn tải audio mp3, bất kể đang chọn video hay audio."""
+        """The "Tải MP3" (Download MP3) button: always mp3 audio, whatever kind is selected."""
         return self._add_urls("audio", "mp3")
 
     def _add_urls(self, kind: str, audio_format: str) -> list[DownloadItem]:
@@ -737,14 +739,14 @@ class App(ttk.Frame):
             for url in urls
         ]
         self.url_text.delete("1.0", "end")
-        # Danh sách độ phân giải thực chỉ đúng cho video vừa thêm -> quay về danh sách chuẩn.
+        # The real resolution list only applied to the video just added -> back to the standard list.
         keep = quality if quality in QUALITY_PRESETS else DEFAULT_QUALITY
         self._set_quality_choices(quality_choices(), select=keep)
         self.res_status_var.set("")
         self.notebook.select(self.queue_tab)
         return items
 
-    # ------------------------------ hàng đợi ------------------------------ #
+    # -------------------------------- queue ------------------------------ #
     def _selected_queue_items(self) -> list[DownloadItem]:
         items = []
         for iid in self.queue_tree.selection():
@@ -834,14 +836,14 @@ class App(ttk.Frame):
         self.detail_var.set("\n".join(parts))
 
     def _poll(self) -> None:
-        while True:  # việc do luồng nền gửi sang (vd. kết quả "Xem độ phân giải")
+        while True:  # work sent by background threads (e.g. "Xem độ phân giải" results)
             try:
                 call = self._ui_calls.get_nowait()
             except Empty:
                 break
             try:
                 call()
-            except Exception:  # báo lỗi kiểu Tk nhưng không làm dừng vòng _poll
+            except Exception:  # report like Tk does, but keep the _poll loop alive
                 self.root.report_callback_exception(*sys.exc_info())
 
         changed: set[int] = set()
@@ -869,7 +871,7 @@ class App(ttk.Frame):
         if not self._closed:
             self._poll_job = self.after(self.POLL_MS, self._poll)
 
-    # ------------------------------- lịch sử ------------------------------ #
+    # ------------------------------- history ----------------------------- #
     @staticmethod
     def _open_history() -> History | None:
         try:
@@ -914,7 +916,7 @@ class App(ttk.Frame):
             self.history.remove(record_id)
         self.refresh_history()
 
-    # -------------------------------- khác -------------------------------- #
+    # -------------------------------- misc ------------------------------- #
     def _open(self, path: Path | str) -> None:
         try:
             open_folder(path)
@@ -925,7 +927,7 @@ class App(ttk.Frame):
         messagebox.showwarning("Chưa cài ffmpeg", ffmpeg_install_instructions(), parent=self.root)
 
     def close(self) -> None:
-        """Tạm dừng các mục đang tải (giữ .part để lần sau tải tiếp) rồi đóng cửa sổ."""
+        """Pause running downloads (keeping .part files to resume later), then close the window."""
         if self._closed:
             return
         self._closed = True
@@ -935,7 +937,7 @@ class App(ttk.Frame):
             except tk.TclError:
                 pass
         if self.recorder is not None and not self._record_stopping:
-            try:  # đang ghi thì lưu file lại trước khi đóng
+            try:  # save an active recording before closing
                 self.recorder.stop()
             except Exception:
                 pass
@@ -944,7 +946,7 @@ class App(ttk.Frame):
 
 
 def _enable_dpi_awareness() -> None:
-    try:  # chữ sắc nét trên màn hình Windows có scale
+    try:  # crisp text on scaled Windows displays
         import ctypes
 
         ctypes.windll.shcore.SetProcessDpiAwareness(1)  # type: ignore[attr-defined]

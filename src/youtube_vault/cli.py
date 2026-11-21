@@ -1,4 +1,9 @@
-"""Giao diện dòng lệnh (Typer + Rich)."""
+"""Command-line interface (Typer + Rich).
+
+User-visible text (``help=``, command docstrings, which Typer shows as help, and console
+messages) is Vietnamese. Always ``escape()`` titles, paths and error text before printing:
+Rich would otherwise swallow ``[jNQX…]`` ids and ``[twitter]`` tags as markup.
+"""
 
 from __future__ import annotations
 
@@ -63,7 +68,7 @@ class AudioFormat(str, Enum):
     wav = "wav"
 
 
-# Bitrate audio, lấy từ config ("best", "320", ...). Tên thành viên không được bắt đầu bằng số.
+# Audio bitrates from config ("best", "320", ...). Member names cannot start with a digit.
 AudioQuality = Enum(  # type: ignore[misc]
     "AudioQuality",
     {(q if q == "best" else f"k{q}"): q for q in AUDIO_QUALITIES},
@@ -86,7 +91,7 @@ UrlArgument = Annotated[
     ),
 ]
 
-# Trình duyệt lấy cookie, lấy từ config.
+# Browsers to read cookies from, taken from config.
 CookieBrowser = Enum(  # type: ignore[misc]
     "CookieBrowser", {b: b for b in COOKIES_BROWSERS}, type=str
 )
@@ -151,7 +156,7 @@ ChooseOption = Annotated[
 
 
 # --------------------------------------------------------------------------- #
-# Tiện ích hiển thị
+# Display helpers
 # --------------------------------------------------------------------------- #
 def _format_duration(seconds: float | None) -> str:
     if seconds is None:
@@ -222,7 +227,7 @@ def _exit_ffmpeg_missing(instructions: str) -> NoReturn:
 
 
 def _choose_quality(url: str, cookies: Cookies | None = None) -> str:
-    """Lấy các độ phân giải video thực sự có, cho người dùng chọn; trả về giá trị chất lượng."""
+    """Fetch the resolutions the video really has, let the user pick one; return the quality value."""
     try:
         with console.status("Đang lấy danh sách độ phân giải..."):
             media = downloader.get_info(url, cookies=cookies)
@@ -276,7 +281,7 @@ def _run_download(action: Callable[[Callable[[ProgressEvent], None]], list[Path]
 
 
 # --------------------------------------------------------------------------- #
-# Lệnh
+# Commands (their docstrings are the CLI help, keep them Vietnamese)
 # --------------------------------------------------------------------------- #
 @app.command()
 def video(
@@ -454,13 +459,13 @@ def sites(
 @app.command()
 def gui() -> None:
     """Mở giao diện desktop (hàng đợi tải + lịch sử)."""
-    from .gui import main as gui_main  # import lười: CLI không cần tkinter
+    from .gui import main as gui_main  # lazy import: the CLI does not need tkinter
 
     gui_main()
 
 
 # --------------------------------------------------------------------------- #
-# Lịch sử
+# History
 # --------------------------------------------------------------------------- #
 history_app = typer.Typer(help="Xem và quản lý lịch sử tải.", no_args_is_help=True)
 app.add_typer(history_app, name="history")
