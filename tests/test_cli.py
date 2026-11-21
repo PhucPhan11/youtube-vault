@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from youtube_vault import cli as cli_module
 from youtube_vault import downloader
 from youtube_vault.cli import app
-from youtube_vault.downloader import DownloadFailedError, MediaInfo, ProgressEvent
+from youtube_vault.downloader import DownloadFailedError, FormatInfo, MediaInfo, ProgressEvent
 from youtube_vault.history import History
 
 runner = CliRunner()
@@ -71,8 +72,108 @@ def test_audio_without_ffmpeg_shows_instructions(fake_ydl, ffmpeg_missing, tmp_p
 
 
 def test_video_rejects_unknown_quality():
-    result = runner.invoke(app, ["video", "https://youtu.be/x", "--quality", "360"])
-    assert result.exit_code != 0
+    result = runner.invoke(app, ["video", "https://youtu.be/x", "--quality", "abc"])
+    assert result.exit_code == 2  # lỗi tham số của Typer
+
+
+@pytest.mark.parametrize(("arg", "expected"), [("1440", "1440"), ("720p", "720"), ("360", "360")])
+def test_video_accepts_any_height(monkeypatch, tmp_path, arg, expected):
+    captured = {}
+
+    def fake_download(url, quality, output_dir, progress_callback, **kwargs):
+        captured["quality"] = quality
+        return []
+
+    monkeypatch.setattr(downloader, "download_video", fake_download)
+    result = runner.invoke(app, ["video", "https://youtu.be/x", "-q", arg, "-o", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert captured["quality"] == expected
+
+
+def _media_with_resolutions() -> MediaInfo:
+    return MediaInfo(
+        id="x",
+        title="Clip",
+        formats=[
+            FormatInfo("140", ext="m4a", vcodec="none", acodec="mp4a", filesize=1_000_000),
+            FormatInfo("299", vcodec="avc1", width=1920, height=1080, fps=60,
+                       filesize=50_000_000, format_note="1080p60"),
+            FormatInfo("136", vcodec="avc1", width=1280, height=720, fps=30,
+                       filesize=20_000_000, format_note="720p"),
+            FormatInfo("160", vcodec="avc1", width=256, height=144, format_note="144p"),
+        ],
+    )
+
+
+def test_video_choose_prompts_and_uses_selection(monkeypatch, ffmpeg_present, tmp_path):
+    captured = {}
+
+    def fake_download(url, quality, output_dir, progress_callback, **kwargs):
+        captured["quality"] = quality
+        return []
+
+    monkeypatch.setattr(downloader, "get_info", lambda url: _media_with_resolutions())
+    monkeypatch.setattr(downloader, "download_video", fake_download)
+    result = runner.invoke(
+        app, ["video", "https://youtu.be/x", "--choose", "-q", "1080", "-o", str(tmp_path)],
+        input="2\n",
+    )
+    assert result.exit_code == 0, result.output
+    assert "1080p60" in result.output and "720p" in result.output and "144p" in result.output
+    assert captured["quality"] == "720"  # --choose thắng -q
+
+
+def test_video_choose_default_is_highest(monkeypatch, ffmpeg_present, tmp_path):
+    captured = {}
+    monkeypatch.setattr(downloader, "get_info", lambda url: _media_with_resolutions())
+    monkeypatch.setattr(
+        downloader, "download_video",
+        lambda url, quality, output_dir, progress_callback, **kw: captured.update(q=quality) or [],
+    )
+    result = runner.invoke(app, ["video", "u", "-c", "-o", str(tmp_path)], input="\n")
+    assert result.exit_code == 0, result.output
+    assert captured["q"] == "1080"
+
+
+def test_video_choose_rejects_playlist(monkeypatch, ffmpeg_present, tmp_path):
+    called = []
+    monkeypatch.setattr(
+        downloader, "get_info", lambda url: MediaInfo(id="PL", title="L", is_playlist=True)
+    )
+    monkeypatch.setattr(downloader, "download_video", lambda *a, **k: called.append(1) or [])
+    result = runner.invoke(app, ["video", "https://youtube.com/playlist?list=PL", "--choose"])
+    assert result.exit_code == 1
+    assert "playlist" in result.output.lower()
+    assert called == []
+
+
+def test_video_choose_without_formats_uses_best(monkeypatch, ffmpeg_present, tmp_path):
+    captured = {}
+    monkeypatch.setattr(downloader, "get_info", lambda url: MediaInfo(id="x", title="t"))
+    monkeypatch.setattr(
+        downloader, "download_video",
+        lambda url, quality, output_dir, progress_callback, **kw: captured.update(q=quality) or [],
+    )
+    result = runner.invoke(app, ["video", "u", "--choose", "-o", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert captured["q"] == "best"
+
+
+def test_video_choose_without_ffmpeg_fails_before_fetching(monkeypatch, ffmpeg_missing):
+    fetched = []
+    monkeypatch.setattr(downloader, "get_info", lambda url: fetched.append(url))
+    result = runner.invoke(app, ["video", "https://youtu.be/x", "--choose"])
+    assert result.exit_code == 1
+    assert "ffmpeg" in result.output.lower()
+    assert fetched == []
+
+
+def test_info_lists_resolutions(monkeypatch):
+    monkeypatch.setattr(downloader, "get_info", lambda url: _media_with_resolutions())
+    result = runner.invoke(app, ["info", "https://youtu.be/x"])
+    assert result.exit_code == 0
+    assert "Độ phân giải có sẵn" in result.output
+    assert "1080p60, 720p, 144p" in result.output
 
 
 def test_video_passes_options_and_reports_files(monkeypatch, tmp_path):
@@ -106,6 +207,43 @@ def test_audio_passes_format(monkeypatch, tmp_path):
     result = runner.invoke(app, ["audio", "https://youtu.be/x", "-f", "m4a", "-o", str(tmp_path)])
     assert result.exit_code == 0, result.output
     assert captured == {"fmt": "m4a"}
+
+
+def test_audio_defaults_best_bitrate_and_embed(monkeypatch, tmp_path):
+    captured = {}
+
+    def fake_download(url, fmt, output_dir, progress_callback, **kwargs):
+        captured.update(fmt=fmt, **kwargs)
+        return []
+
+    monkeypatch.setattr(downloader, "download_audio", fake_download)
+    result = runner.invoke(app, ["audio", "https://youtu.be/x", "-o", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert captured["fmt"] == "mp3"
+    assert captured["audio_quality"] == "best"
+    assert captured["embed_metadata"] is True
+
+
+def test_audio_passes_bitrate_and_no_embed(monkeypatch, tmp_path):
+    captured = {}
+
+    def fake_download(url, fmt, output_dir, progress_callback, **kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr(downloader, "download_audio", fake_download)
+    result = runner.invoke(
+        app, ["audio", "https://youtu.be/x", "-b", "192", "--no-embed", "-o", str(tmp_path)]
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["audio_quality"] == "192"
+    assert captured["embed_metadata"] is False
+
+
+def test_audio_rejects_invalid_bitrate(monkeypatch, tmp_path):
+    monkeypatch.setattr(downloader, "download_audio", lambda *a, **k: [])
+    result = runner.invoke(app, ["audio", "https://youtu.be/x", "-b", "999", "-o", str(tmp_path)])
+    assert result.exit_code != 0
 
 
 # ------------------------------- history ---------------------------------- #

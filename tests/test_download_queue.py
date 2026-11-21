@@ -307,3 +307,21 @@ def test_shutdown_pauses_running(fake, make_queue, tmp_path):
     late = q.add("b", output_dir=tmp_path)
     time.sleep(0.05)
     assert late.status == ItemStatus.QUEUED
+
+
+def test_audio_options_passed_to_downloader(fake, make_queue, tmp_path):
+    fake.gate.set()
+    q = make_queue()
+    item = q.add(
+        "a1",
+        kind="audio",
+        audio_format="mp3",
+        output_dir=tmp_path,
+        audio_quality="320",
+        embed_metadata=False,
+    )
+    wait_for(lambda: item.status == ItemStatus.COMPLETED)
+    call = fake.calls[0]
+    assert call["fmt"] == "mp3"
+    assert call["audio_quality"] == "320"
+    assert call["embed_metadata"] is False

@@ -20,10 +20,18 @@ from rich.progress import (
     TimeRemainingColumn,
     TransferSpeedColumn,
 )
+from rich.prompt import IntPrompt
 from rich.table import Table
 
 from . import downloader
-from .config import DEFAULT_OUTPUT_DIR
+from .config import (
+    AUDIO_QUALITIES,
+    DEFAULT_AUDIO_QUALITY,
+    DEFAULT_EMBED_METADATA,
+    DEFAULT_OUTPUT_DIR,
+    DEFAULT_QUALITY,
+    QUALITY_PRESETS,
+)
 from .downloader import (
     FFmpegNotFoundError,
     MediaInfo,
@@ -42,18 +50,19 @@ console = Console()
 err_console = Console(stderr=True)
 
 
-class Quality(str, Enum):
-    best = "best"
-    p1080 = "1080"
-    p720 = "720"
-    p480 = "480"
-
-
 class AudioFormat(str, Enum):
     mp3 = "mp3"
     m4a = "m4a"
     opus = "opus"
     wav = "wav"
+
+
+# Bitrate audio, lấy từ config ("best", "320", ...). Tên thành viên không được bắt đầu bằng số.
+AudioQuality = Enum(  # type: ignore[misc]
+    "AudioQuality",
+    {(q if q == "best" else f"k{q}"): q for q in AUDIO_QUALITIES},
+    type=str,
+)
 
 
 OutOption = Annotated[
@@ -63,6 +72,35 @@ OutOption = Annotated[
 ForceOption = Annotated[
     bool,
     typer.Option("--force", help="Tải lại kể cả khi đã có trong lịch sử."),
+]
+
+
+def _validate_quality(value: str) -> str:
+    try:
+        return downloader.normalize_quality(value)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from None
+
+
+QualityOption = Annotated[
+    str,
+    typer.Option(
+        "--quality",
+        "-q",
+        callback=_validate_quality,
+        help=(
+            f"Độ phân giải: {', '.join(QUALITY_PRESETS)} hoặc số bất kỳ (vd. 720p). "
+            "Video không có mức này thì lấy mức gần nhất bên dưới."
+        ),
+    ),
+]
+ChooseOption = Annotated[
+    bool,
+    typer.Option(
+        "--choose",
+        "-c",
+        help="Xem các độ phân giải video thực sự có rồi chọn (chỉ dùng cho một video).",
+    ),
 ]
 
 
@@ -132,15 +170,53 @@ def _progress_callback(progress: Progress) -> Callable[[ProgressEvent], None]:
     return callback
 
 
+def _exit_ffmpeg_missing(instructions: str) -> None:
+    err_console.print(Panel(instructions, title="[bold red]Chưa cài ffmpeg", border_style="red"))
+    raise typer.Exit(1)
+
+
+def _choose_quality(url: str) -> str:
+    """Lấy các độ phân giải video thực sự có, cho người dùng chọn; trả về giá trị chất lượng."""
+    try:
+        with console.status("Đang lấy danh sách độ phân giải..."):
+            media = downloader.get_info(url)
+    except YoutubeVaultError as exc:
+        err_console.print(f"[bold red]Lỗi:[/] {exc}")
+        raise typer.Exit(1) from None
+    if media.is_playlist:
+        err_console.print(
+            "[bold red]Lỗi:[/] --choose chỉ dùng cho một video, không dùng cho playlist. "
+            "Hãy dùng --quality."
+        )
+        raise typer.Exit(1)
+
+    options = downloader.list_resolutions(media)
+    if not options:
+        console.print("[yellow]Không tìm thấy danh sách độ phân giải, dùng chất lượng tốt nhất.[/]")
+        return DEFAULT_QUALITY
+
+    console.print(f"[bold]{media.title or url}[/]")
+    table = Table("#", "Độ phân giải", "FPS", "Dung lượng (ước tính)")
+    for i, opt in enumerate(options, start=1):
+        table.add_row(
+            str(i), opt.label, f"{opt.fps:g}" if opt.fps else "", _format_size(opt.filesize)
+        )
+    console.print(table)
+    choice = IntPrompt.ask(
+        "Chọn số",
+        choices=[str(i) for i in range(1, len(options) + 1)],
+        default=1,
+        console=console,
+    )
+    return options[choice - 1].quality
+
+
 def _run_download(action: Callable[[Callable[[ProgressEvent], None]], list[Path]]) -> None:
     try:
         with _make_progress() as progress:
             files = action(_progress_callback(progress))
     except FFmpegNotFoundError as exc:
-        err_console.print(
-            Panel(exc.instructions, title="[bold red]Chưa cài ffmpeg", border_style="red")
-        )
-        raise typer.Exit(1) from None
+        _exit_ffmpeg_missing(exc.instructions)
     except YoutubeVaultError as exc:
         err_console.print(f"[bold red]Lỗi:[/] {exc}")
         raise typer.Exit(1) from None
@@ -159,18 +235,21 @@ def _run_download(action: Callable[[Callable[[ProgressEvent], None]], list[Path]
 @app.command()
 def video(
     url: Annotated[str, typer.Argument(help="URL video hoặc playlist YouTube.")],
-    quality: Annotated[
-        Quality, typer.Option("--quality", "-q", help="Chất lượng video.")
-    ] = Quality.best,
+    quality: QualityOption = DEFAULT_QUALITY,
+    choose: ChooseOption = False,
     out: OutOption = DEFAULT_OUTPUT_DIR,
     force: ForceOption = False,
 ) -> None:
     """Tải video mp4 (ghép video + audio)."""
+    if choose:
+        if not downloader.is_ffmpeg_available():
+            _exit_ffmpeg_missing(downloader.ffmpeg_install_instructions())
+        quality = _choose_quality(url)
     hist = _open_history()
     _run_download(
         lambda cb: downloader.download_video(
             url,
-            quality=quality.value,
+            quality=quality,
             output_dir=out,
             progress_callback=cb,
             history=hist,
@@ -185,10 +264,25 @@ def audio(
     fmt: Annotated[
         AudioFormat, typer.Option("--format", "-f", help="Định dạng audio.")
     ] = AudioFormat.mp3,
+    bitrate: Annotated[
+        AudioQuality,
+        typer.Option(
+            "--bitrate",
+            "-b",
+            help="Bitrate audio (kbps); 'best' = chất lượng VBR cao nhất. Không áp dụng cho wav.",
+        ),
+    ] = AudioQuality(DEFAULT_AUDIO_QUALITY),
+    embed: Annotated[
+        bool,
+        typer.Option(
+            "--embed/--no-embed",
+            help="Gắn tiêu đề, nghệ sĩ và ảnh bìa (thumbnail, chỉ mp3/m4a) vào file.",
+        ),
+    ] = DEFAULT_EMBED_METADATA,
     out: OutOption = DEFAULT_OUTPUT_DIR,
     force: ForceOption = False,
 ) -> None:
-    """Chỉ tải audio."""
+    """Chỉ tải audio (mặc định mp3)."""
     hist = _open_history()
     _run_download(
         lambda cb: downloader.download_audio(
@@ -198,6 +292,8 @@ def audio(
             progress_callback=cb,
             history=hist,
             force=force,
+            audio_quality=bitrate.value,
+            embed_metadata=embed,
         )
     )
 
@@ -336,6 +432,11 @@ def _print_info(media: MediaInfo) -> None:
                 _format_size(f.filesize),
             )
         console.print(table)
+
+    resolutions = downloader.list_resolutions(media)
+    if resolutions:
+        labels = ", ".join(r.label for r in resolutions)
+        console.print(f"[bold]Độ phân giải có sẵn:[/] {labels}")
 
 
 if __name__ == "__main__":

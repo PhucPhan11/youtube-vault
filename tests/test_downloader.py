@@ -7,43 +7,195 @@ import pytest
 from yt_dlp.utils import DownloadError
 
 from youtube_vault import downloader
-from youtube_vault.config import OUTPUT_TEMPLATE, QUALITY_PRESETS
+from youtube_vault.config import (
+    OUTPUT_TEMPLATE,
+    QUALITY_PRESETS,
+    VIDEO_FORMAT,
+    VIDEO_FORMAT_PREFERENCE,
+)
 from youtube_vault.downloader import (
     DownloadCancelledError,
     DownloadFailedError,
     FFmpegNotFoundError,
+    FormatInfo,
+    MediaInfo,
     ProgressEvent,
+    ResolutionOption,
     download_audio,
     download_video,
     ffmpeg_install_instructions,
+    format_sort_for,
     get_info,
+    list_resolutions,
+    normalize_quality,
 )
 from youtube_vault.history import HistoryArchive, HistoryRecorder
 
 
 # ---------------------------- download_video ------------------------------- #
-@pytest.mark.parametrize("quality", ["best", "1080", "720", "480"])
+@pytest.mark.parametrize("quality", list(QUALITY_PRESETS))
 def test_download_video_uses_quality_preset(fake_ydl, ffmpeg_present, tmp_path, quality):
     download_video("https://youtu.be/x", quality=quality, output_dir=tmp_path)
 
     opts = fake_ydl.instances[0].opts
-    assert opts["format"] == QUALITY_PRESETS[quality]
+    assert opts["format"] == VIDEO_FORMAT
+    assert opts["format_sort"] == QUALITY_PRESETS[quality]
     assert opts["merge_output_format"] == "mp4"
     assert opts["outtmpl"] == str(tmp_path / OUTPUT_TEMPLATE)
     assert opts["noplaylist"] is False
     assert fake_ydl.instances[0].calls == [("https://youtu.be/x", True)]
 
 
-def test_height_presets_limit_resolution():
-    assert "height<=1080" in QUALITY_PRESETS["1080"]
-    assert "height<=720" in QUALITY_PRESETS["720"]
-    assert "height<=480" in QUALITY_PRESETS["480"]
+@pytest.mark.parametrize(
+    ("quality", "expected"),
+    [
+        ("804", ["res:804", VIDEO_FORMAT_PREFERENCE]),  # mức không chuẩn (video 21:9)
+        ("720p", ["res:720", VIDEO_FORMAT_PREFERENCE]),
+        ("best", ["res", VIDEO_FORMAT_PREFERENCE]),
+    ],
+)
+def test_download_video_accepts_any_height(fake_ydl, ffmpeg_present, tmp_path, quality, expected):
+    download_video("https://youtu.be/x", quality=quality, output_dir=tmp_path)
+    assert fake_ydl.instances[0].opts["format_sort"] == expected
 
 
-def test_download_video_rejects_invalid_quality(fake_ydl, ffmpeg_present, tmp_path):
+def test_format_sort_returns_copy():
+    format_sort_for("720").append("x")
+    assert QUALITY_PRESETS["720"] == ["res:720", VIDEO_FORMAT_PREFERENCE]
+
+
+@pytest.mark.parametrize("bad", ["abc", "0", "-5", "", "720x", "p"])
+def test_download_video_rejects_invalid_quality(fake_ydl, ffmpeg_present, tmp_path, bad):
     with pytest.raises(ValueError):
-        download_video("https://youtu.be/x", quality="360", output_dir=tmp_path)
+        download_video("https://youtu.be/x", quality=bad, output_dir=tmp_path)
     assert fake_ydl.instances == []
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [("best", "best"), (" BEST ", "best"), ("1080", "1080"), ("720p", "720"), ("0144", "144")],
+)
+def test_normalize_quality(raw, expected):
+    assert normalize_quality(raw) == expected
+
+
+# ------------------- chọn định dạng thật của yt-dlp (offline) -------------- #
+def _fmt(fid, w, h, ext, vcodec, acodec="none"):
+    return dict(format_id=fid, url=f"https://example.invalid/{fid}", protocol="https", ext=ext,
+                vcodec=vcodec, acodec=acodec, width=w, height=h, tbr=float(w or 1) * float(h or 1))
+
+
+_AUDIO = [_fmt("140", None, None, "m4a", "none", "mp4a.40.2"),
+          _fmt("251", None, None, "webm", "none", "opus")]
+FORMAT_SETS = {
+    # 1440p chỉ có webm/vp9: quy tắc cũ (ưu tiên mp4 trước) sẽ tụt xuống 1080p.
+    "landscape": _AUDIO + [
+        _fmt("313", 3840, 2160, "webm", "vp9"), _fmt("271", 2560, 1440, "webm", "vp9"),
+        _fmt("137", 1920, 1080, "mp4", "avc1"), _fmt("248", 1920, 1080, "webm", "vp9"),
+        _fmt("136", 1280, 720, "mp4", "avc1"), _fmt("134", 640, 360, "mp4", "avc1"),
+    ],
+    # Shorts: video dọc, height > width.
+    "vertical": _AUDIO + [
+        _fmt("137", 1080, 1920, "mp4", "avc1"), _fmt("136", 720, 1280, "mp4", "avc1"),
+        _fmt("134", 360, 640, "mp4", "avc1"),
+    ],
+    # Phim 21:9: "1080p" thực ra là 1920x804.
+    "cinema": _AUDIO + [
+        _fmt("137", 1920, 804, "mp4", "avc1"), _fmt("136", 1280, 536, "mp4", "avc1"),
+    ],
+}
+
+
+def _select(formats, quality) -> dict:
+    """Cho yt-dlp THẬT chọn định dạng (không mạng, không tải) với opts của download_video."""
+    import yt_dlp
+
+    opts = {"quiet": True, "format": VIDEO_FORMAT, "format_sort": format_sort_for(quality)}
+    info = {"id": "x", "title": "t", "extractor": "youtube", "extractor_key": "Youtube",
+            "webpage_url": "https://youtu.be/x", "formats": [dict(f) for f in formats]}
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        return ydl.process_ie_result(info, download=False)
+
+
+@pytest.mark.parametrize(
+    ("format_set", "quality", "expected"),
+    [
+        ("landscape", "best", (3840, 2160)),
+        ("landscape", "1440", (2560, 1440)),
+        ("landscape", "1080", (1920, 1080)),
+        ("landscape", "480", (640, 360)),    # không có 480 -> mức gần nhất bên dưới
+        ("landscape", "144", (640, 360)),    # thấp hơn mức nhỏ nhất -> lấy mức nhỏ nhất
+        ("vertical", "1080", (1080, 1920)),
+        ("vertical", "720", (720, 1280)),
+        ("cinema", "1080", (1920, 804)),
+        ("cinema", "720", (1280, 536)),
+    ],
+)
+def test_real_ytdlp_picks_requested_resolution(format_set, quality, expected):
+    result = _select(FORMAT_SETS[format_set], quality)
+    video, audio = result["requested_formats"]
+    assert (video["width"], video["height"]) == expected
+    assert audio["ext"] == "m4a"
+
+
+def test_real_ytdlp_prefers_mp4_at_same_resolution():
+    # 1080p có cả mp4/avc1 (137) và webm/vp9 (248): chọn mp4 để ghép mp4 tương thích hơn.
+    assert _select(FORMAT_SETS["landscape"], "1080")["format_id"] == "137+140"
+
+
+# ----------------------------- list_resolutions ----------------------------- #
+def _media(formats, **kw):
+    return MediaInfo(id="x", title="t", formats=formats, **kw)
+
+
+def test_list_resolutions_groups_and_sorts():
+    media = _media([
+        FormatInfo("sb0", ext="mhtml", vcodec="none", acodec="none", width=160, height=90),
+        FormatInfo("140", ext="m4a", vcodec="none", acodec="mp4a", filesize=3_000_000),
+        FormatInfo("251", ext="webm", vcodec="none", acodec="opus", filesize=4_000_000),
+        FormatInfo("299", ext="mp4", vcodec="avc1", width=1920, height=1080, fps=60,
+                   filesize=90_000_000, format_note="1080p60"),
+        FormatInfo("303", ext="webm", vcodec="vp9", width=1920, height=1080, fps=60,
+                   filesize=70_000_000, format_note="1080p60"),
+        FormatInfo("313", ext="webm", vcodec="vp9", width=3840, height=2160, fps=30,
+                   filesize=None, format_note="2160p"),
+        FormatInfo("136", ext="mp4", vcodec="avc1", width=1280, height=720, fps=30,
+                   filesize=20_000_000, format_note="720p"),
+    ])
+    options = list_resolutions(media)
+
+    assert [o.height for o in options] == [2160, 1080, 720]
+    assert [o.label for o in options] == ["2160p (4K)", "1080p60", "720p"]
+    by_height = {o.height: o for o in options}
+    assert by_height[1080].filesize == 90_000_000 + 3_000_000  # video lớn nhất + audio m4a
+    assert by_height[2160].filesize is None  # không biết dung lượng video -> không ước tính
+    assert by_height[720].quality == "720"
+
+
+def test_list_resolutions_uses_short_side_without_note():
+    media = _media([
+        FormatInfo("v1", vcodec="avc1", width=1080, height=1920),  # Shorts
+        FormatInfo("v2", vcodec="avc1", width=720, height=1280),
+        FormatInfo("v3", vcodec="avc1", width=1920, height=804),   # 21:9, không có note
+    ])
+    assert [o.height for o in list_resolutions(media)] == [1080, 804, 720]
+
+
+def test_list_resolutions_prefers_format_note():
+    media = _media([FormatInfo("v", vcodec="avc1", width=1920, height=804, format_note="1080p")])
+    assert [o.height for o in list_resolutions(media)] == [1080]
+
+
+def test_list_resolutions_empty_for_playlist_and_audio_only():
+    assert list_resolutions(_media([], is_playlist=True)) == []
+    assert list_resolutions(_media([FormatInfo("140", vcodec="none", acodec="mp4a")])) == []
+
+
+def test_resolution_label():
+    assert ResolutionOption(4320).label == "4320p (8K)"
+    assert ResolutionOption(1440, fps=60).label == "1440p60"
+    assert ResolutionOption(1080, fps=59.94).label == "1080p60"
+    assert ResolutionOption(720, fps=30).label == "720p"
 
 
 def test_download_video_creates_output_dir(fake_ydl, ffmpeg_present, tmp_path):
@@ -97,6 +249,46 @@ def test_download_audio_uses_extract_audio_postprocessor(fake_ydl, ffmpeg_presen
     assert opts["postprocessors"][0]["key"] == "FFmpegExtractAudio"
     assert opts["postprocessors"][0]["preferredcodec"] == fmt
     assert opts["outtmpl"] == str(tmp_path / OUTPUT_TEMPLATE)
+
+
+@pytest.mark.parametrize(("bitrate", "expected"), [("best", "0"), ("320", "320"), ("128", "128")])
+def test_download_audio_bitrate(fake_ydl, ffmpeg_present, tmp_path, bitrate, expected):
+    download_audio("https://youtu.be/x", output_dir=tmp_path, audio_quality=bitrate)
+    pp = fake_ydl.instances[0].opts["postprocessors"][0]
+    assert pp["preferredquality"] == expected
+
+
+def test_download_audio_rejects_invalid_bitrate(fake_ydl, ffmpeg_present, tmp_path):
+    with pytest.raises(ValueError, match="Bitrate"):
+        download_audio("https://youtu.be/x", output_dir=tmp_path, audio_quality="999")
+    assert fake_ydl.instances == []
+
+
+@pytest.mark.parametrize("fmt", ["mp3", "m4a"])
+def test_download_audio_embeds_metadata_and_cover(fake_ydl, ffmpeg_present, tmp_path, fmt):
+    download_audio("https://youtu.be/x", fmt=fmt, output_dir=tmp_path)  # mặc định: có gắn
+    opts = fake_ydl.instances[0].opts
+    assert [pp["key"] for pp in opts["postprocessors"]] == [
+        "FFmpegExtractAudio",
+        "FFmpegMetadata",
+        "EmbedThumbnail",
+    ]
+    assert opts["writethumbnail"] is True
+
+
+@pytest.mark.parametrize("fmt", ["opus", "wav"])
+def test_download_audio_embed_without_cover_for_other_formats(fake_ydl, ffmpeg_present, tmp_path, fmt):
+    download_audio("https://youtu.be/x", fmt=fmt, output_dir=tmp_path)
+    opts = fake_ydl.instances[0].opts
+    assert [pp["key"] for pp in opts["postprocessors"]] == ["FFmpegExtractAudio", "FFmpegMetadata"]
+    assert "writethumbnail" not in opts
+
+
+def test_download_audio_no_embed(fake_ydl, ffmpeg_present, tmp_path):
+    download_audio("https://youtu.be/x", output_dir=tmp_path, embed_metadata=False)
+    opts = fake_ydl.instances[0].opts
+    assert [pp["key"] for pp in opts["postprocessors"]] == ["FFmpegExtractAudio"]
+    assert "writethumbnail" not in opts
 
 
 def test_download_audio_rejects_invalid_format(fake_ydl, ffmpeg_present, tmp_path):

@@ -63,8 +63,13 @@ Key flows:
 - **Threading:** `DownloadQueue` runs one daemon thread per active item (≤ `max_workers`, 1–5),
   guards state with `_lock`, retries network failures with `RETRY_DELAYS` (never `FFmpegNotFoundError`),
   and calls `on_update(item)` **from worker threads**. The GUI only pushes item ids into a
-  `SimpleQueue` there and renders in `App._poll` (Tk `after`, 100 ms). **Never touch Tk widgets
-  from a worker thread.**
+  `SimpleQueue` there and renders in `App._poll` (Tk `after`, 100 ms). Other background work
+  (e.g. "Xem độ phân giải") sends callables through `App._ui_calls`, which `_poll` also drains.
+  **Never touch Tk widgets from a worker thread.**
+- **Resolution choice:** `quality` is `"best"` or any height (`normalize_quality`). Selection uses
+  yt-dlp `format_sort` (`res:N` = largest ≤ N, else smallest above; `res` is the short side, so
+  Shorts/21:9 work), not `[height<=N]` filters. See `config.QUALITY_PRESETS` and
+  `downloader.format_sort_for`. `list_resolutions(media)` gives the real per-video list.
 - **Errors:** the core raises `YoutubeVaultError` subclasses (`FFmpegNotFoundError`,
   `DownloadFailedError`, `DownloadCancelledError`). The CLI turns them into Rich messages and
   `typer.Exit(1)` (`cli._run_download`). The GUI shows them per item.
@@ -84,8 +89,12 @@ Key flows:
 - Queue tests monkeypatch `downloader.download_video/download_audio` and poll with
   `wait_for(cond)` (`tests/test_download_queue.py`). Build queues with that file's `make_queue()`
   helper, which defaults `retry_delays=(0,)` so retries don't sleep.
-- GUI tests cover pure helpers (`parse_urls`, `format_row`, `item_percent`) and queue behaviour,
-  not live Tk widgets (no display assumed).
+- GUI tests cover pure helpers (`parse_urls`, `format_row`, `item_percent`, `quality_choices`),
+  plus live-widget tests that use the `tk_root` fixture (it skips when Tk has no display) and
+  `_pump(root, cond)` to drive the event loop until a condition holds.
+- yt-dlp format selection is tested offline with the **real** `YoutubeDL.process_ie_result(...,
+  download=False)` on synthetic format lists (`_select` in `tests/test_downloader.py`). Extend it
+  whenever `VIDEO_FORMAT` or `QUALITY_PRESETS` change.
 - Every behaviour change ships with a test. `uv run pytest` must be green before finishing (the
   Stop hook enforces it, see below).
 

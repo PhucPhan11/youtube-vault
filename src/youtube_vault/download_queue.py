@@ -23,6 +23,8 @@ from pathlib import Path
 from . import downloader
 from .config import (
     DEFAULT_AUDIO_FORMAT,
+    DEFAULT_AUDIO_QUALITY,
+    DEFAULT_EMBED_METADATA,
     DEFAULT_MAX_RETRIES,
     DEFAULT_MAX_WORKERS,
     DEFAULT_OUTPUT_DIR,
@@ -65,6 +67,8 @@ class DownloadItem:
     kind: str = "video"  # "video" | "audio"
     quality: str = DEFAULT_QUALITY
     audio_format: str = DEFAULT_AUDIO_FORMAT
+    audio_quality: str = DEFAULT_AUDIO_QUALITY  # bitrate: "best" hoặc kbps
+    embed_metadata: bool = DEFAULT_EMBED_METADATA
     output_dir: Path = DEFAULT_OUTPUT_DIR
     force: bool = False
     status: ItemStatus = ItemStatus.QUEUED
@@ -138,6 +142,8 @@ class DownloadQueue:
         audio_format: str = DEFAULT_AUDIO_FORMAT,
         output_dir: Path | str = DEFAULT_OUTPUT_DIR,
         force: bool = False,
+        audio_quality: str = DEFAULT_AUDIO_QUALITY,
+        embed_metadata: bool = DEFAULT_EMBED_METADATA,
     ) -> DownloadItem:
         if kind not in ("video", "audio"):
             raise ValueError(f"Loại không hợp lệ: {kind!r}")
@@ -147,6 +153,8 @@ class DownloadQueue:
             kind=kind,
             quality=quality,
             audio_format=audio_format,
+            audio_quality=audio_quality,
+            embed_metadata=embed_metadata,
             output_dir=Path(output_dir).expanduser(),
             force=force,
         )
@@ -304,6 +312,8 @@ class DownloadQueue:
                         history=self.history,
                         force=item.force,
                         cancel_event=item._cancel_event,
+                        audio_quality=item.audio_quality,
+                        embed_metadata=item.embed_metadata,
                     )
                 else:
                     files = downloader.download_video(

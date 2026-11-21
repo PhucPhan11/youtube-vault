@@ -2,8 +2,8 @@
 
 Công cụ dòng lệnh để tải video và audio YouTube về máy, xây dựng trên [yt-dlp](https://github.com/yt-dlp/yt-dlp).
 
-- Tải video mp4 (tự ghép luồng video + audio) với các mức chất lượng `best`, `1080`, `720`, `480`
-- Chỉ tải audio (`mp3`, `m4a`, `opus`, `wav`)
+- Tải video mp4 (tự ghép luồng video + audio), chọn độ phân giải từ `best`, 8K/4K, `1440` … `144`, hoặc **chọn từ danh sách độ phân giải mà video thực sự có**
+- Chỉ tải audio (`mp3`, `m4a`, `opus`, `wav`), chọn bitrate (`best`, `320` … `128` kbps), tự gắn tiêu đề/nghệ sĩ và ảnh bìa (thumbnail) vào file
 - Xem thông tin video/playlist mà không cần tải
 - Hỗ trợ URL playlist
 - Thanh tiến độ hiển thị bằng Rich
@@ -42,7 +42,7 @@ uv sync
 # Xem các lệnh
 uv run youtube-vault --help
 
-# Xem thông tin (tiêu đề, thời lượng, định dạng có sẵn)
+# Xem thông tin (tiêu đề, thời lượng, định dạng và độ phân giải có sẵn)
 uv run youtube-vault info "https://www.youtube.com/watch?v=jNQXAC9IVRw"
 
 # Tải video chất lượng tốt nhất
@@ -51,9 +51,16 @@ uv run youtube-vault video "https://www.youtube.com/watch?v=jNQXAC9IVRw"
 # Tải video 720p vào thư mục khác
 uv run youtube-vault video URL --quality 720 --out D:\Videos
 
+# Xem các độ phân giải video thực sự có rồi chọn số
+uv run youtube-vault video URL --choose
+
 # Chỉ tải audio mp3 (mặc định) hoặc m4a
 uv run youtube-vault audio URL
 uv run youtube-vault audio URL --format m4a
+
+# mp3 320 kbps; hoặc không gắn thông tin/ảnh bìa
+uv run youtube-vault audio URL --bitrate 320
+uv run youtube-vault audio URL --no-embed
 
 # Tải cả playlist
 uv run youtube-vault video "https://www.youtube.com/playlist?list=..."
@@ -63,11 +70,15 @@ uv run youtube-vault video "https://www.youtube.com/playlist?list=..."
 
 | Lệnh | Tùy chọn | Mặc định | Giá trị |
 |---|---|---|---|
-| `video` | `--quality`, `-q` | `best` | `best`, `1080`, `720`, `480` |
+| `video` | `--quality`, `-q` | `best` | `best`, `4320`, `2160`, `1440`, `1080`, `720`, `480`, `360`, `240`, `144` hoặc số bất kỳ (`720p` cũng được) |
+| `video` | `--choose`, `-c` | tắt | hiện danh sách độ phân giải của video (kèm FPS, dung lượng ước tính) để chọn; chỉ dùng cho một video, không dùng cho playlist |
 | `audio` | `--format`, `-f` | `mp3` | `mp3`, `m4a`, `opus`, `wav` |
+| `audio` | `--bitrate`, `-b` | `best` | `best` (VBR chất lượng cao nhất), `320`, `256`, `192`, `128` (kbps); không áp dụng cho `wav` |
+| `audio` | `--embed` / `--no-embed` | bật | gắn tiêu đề, nghệ sĩ, ngày đăng vào file; với `mp3`/`m4a` gắn thêm thumbnail làm ảnh bìa |
 | `video`, `audio` | `--out`, `-o` | `~/Downloads/youtube-vault/` | đường dẫn thư mục |
-
 | `video`, `audio` | `--force` | tắt | tải lại kể cả khi đã có trong lịch sử |
+
+**Cách chọn độ phân giải:** lấy mức lớn nhất không vượt quá mức đã chọn (vd. chọn `1440` mà video chỉ có tới 1080p thì tải 1080p). Nếu video không có mức nào thấp như vậy thì lấy mức nhỏ nhất có sẵn. Độ phân giải tính theo cạnh ngắn của khung hình, nên video dọc (Shorts, 1080×1920) và phim màn ảnh rộng 21:9 (1920×804) đều được tính là 1080p. Cùng độ phân giải thì ưu tiên mp4 + m4a.
 
 File được đặt tên theo mẫu `%(title)s [%(id)s].%(ext)s`, ví dụ `Me at the zoo [jNQXAC9IVRw].mp4`.
 
@@ -81,6 +92,9 @@ uv run youtube-vault gui
 ```
 
 - **Thêm tải xuống:** dán một hoặc nhiều link (mỗi dòng một link, có thể là playlist), chọn Video/Audio, chất lượng hoặc định dạng, thư mục lưu, rồi bấm *Thêm vào hàng đợi*.
+  - *Xem độ phân giải*: lấy danh sách độ phân giải mà video (link đầu tiên) thực sự có, kèm dung lượng ước tính, rồi hiện trong ô *Chất lượng* để chọn. Với playlist thì giữ danh sách chuẩn. Sau khi thêm vào hàng đợi, ô *Chất lượng* trở lại danh sách chuẩn.
+  - *Bitrate audio* và *Gắn thông tin + ảnh bìa*: áp dụng cho mục audio (bitrate bị khóa khi chọn `wav`).
+  - *Tải MP3*: bấm một lần là thêm các link vào hàng đợi dưới dạng audio mp3, dù đang chọn Video hay định dạng audio khác (dùng bitrate và tùy chọn ảnh bìa đang chọn).
 - **Tab Hàng đợi:** xem tiến độ, tốc độ, thời gian còn lại của từng mục.
   - *Số luồng* (1–5): số video tải cùng lúc, đổi được ngay khi đang tải.
   - *Tạm dừng*: dừng tải nhưng giữ file `.part`; *Tiếp tục* sẽ tải nối tiếp từ chỗ dừng.
@@ -107,12 +121,13 @@ uv run youtube-vault history clear --yes        # xóa toàn bộ lịch sử
 ## Dùng như thư viện
 
 ```python
-from youtube_vault.downloader import download_video, get_info
+from youtube_vault.downloader import download_video, get_info, list_resolutions
 from youtube_vault.download_queue import DownloadQueue
 from youtube_vault.history import History
 
 info = get_info("https://www.youtube.com/watch?v=jNQXAC9IVRw")
 print(info.title, info.duration)
+print([r.label for r in list_resolutions(info)])  # vd. ['240p', '144p']
 
 def on_progress(event):
     print(event.status, event.title, event.percent)
@@ -122,7 +137,8 @@ download_video(info.url, quality="720", progress_callback=on_progress, history=H
 
 # Hàng đợi: 3 luồng song song
 queue = DownloadQueue(max_workers=3, history=History(), on_update=lambda item: print(item.status))
-item = queue.add("https://www.youtube.com/watch?v=jNQXAC9IVRw", kind="audio", audio_format="mp3")
+item = queue.add("https://www.youtube.com/watch?v=jNQXAC9IVRw", kind="audio", audio_format="mp3",
+                 audio_quality="320", embed_metadata=True)
 queue.pause(item.id); queue.resume(item.id)
 ```
 

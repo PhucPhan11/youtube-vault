@@ -7,6 +7,7 @@ và GUI sau này đều dùng lại được. Tiến độ được báo qua ``p
 from __future__ import annotations
 
 import platform
+import re
 import shutil
 import threading
 from collections.abc import Callable, Iterator
@@ -20,11 +21,17 @@ from yt_dlp.utils import DownloadCancelled, DownloadError
 from .history import History, HistoryArchive, HistoryRecord, HistoryRecorder
 from .config import (
     AUDIO_FORMATS,
+    AUDIO_QUALITIES,
     DEFAULT_AUDIO_FORMAT,
+    DEFAULT_AUDIO_QUALITY,
+    DEFAULT_EMBED_METADATA,
     DEFAULT_OUTPUT_DIR,
+    EMBED_THUMBNAIL_FORMATS,
     DEFAULT_QUALITY,
     OUTPUT_TEMPLATE,
     QUALITY_PRESETS,
+    VIDEO_FORMAT,
+    VIDEO_FORMAT_PREFERENCE,
 )
 
 __all__ = [
@@ -35,12 +42,16 @@ __all__ = [
     "MediaInfo",
     "ProgressCallback",
     "ProgressEvent",
+    "ResolutionOption",
     "YoutubeVaultError",
     "download_audio",
     "download_video",
     "ffmpeg_install_instructions",
+    "format_sort_for",
     "get_info",
     "is_ffmpeg_available",
+    "list_resolutions",
+    "normalize_quality",
 ]
 
 
@@ -176,6 +187,16 @@ class FormatInfo:
     vcodec: str | None = None
     acodec: str | None = None
     filesize: int | None = None
+    width: int | None = None
+    format_note: str | None = None  # YouTube: "1080p60", "720p", ...
+
+    @property
+    def has_video(self) -> bool:
+        return self.vcodec not in (None, "none")
+
+    @property
+    def is_audio_only(self) -> bool:
+        return not self.has_video and self.acodec not in (None, "none")
 
 
 @dataclass
@@ -200,6 +221,8 @@ def _parse_format(f: dict[str, Any]) -> FormatInfo:
         vcodec=f.get("vcodec"),
         acodec=f.get("acodec"),
         filesize=f.get("filesize") or f.get("filesize_approx"),
+        width=f.get("width"),
+        format_note=f.get("format_note"),
     )
 
 
@@ -234,6 +257,99 @@ def get_info(url: str) -> MediaInfo:
     if not info:
         raise DownloadFailedError(f"Không lấy được thông tin cho: {url}")
     return _parse_info(info)
+
+
+# --------------------------------------------------------------------------- #
+# Độ phân giải
+# --------------------------------------------------------------------------- #
+_QUALITY_RE = re.compile(r"^(\d+)p?$")
+_NOTE_HEIGHT_RE = re.compile(r"^(\d{2,4})p")
+_RESOLUTION_TAGS: dict[int, str] = {4320: "8K", 2160: "4K"}
+
+
+def normalize_quality(quality: str) -> str:
+    """Chuẩn hóa chất lượng: ``"best"`` hoặc số dòng dương (``"720p"`` -> ``"720"``).
+
+    Ném ``ValueError`` nếu không hợp lệ.
+    """
+    q = str(quality).strip().lower()
+    if q == "best":
+        return q
+    match = _QUALITY_RE.match(q)
+    if match and int(match.group(1)) > 0:
+        return str(int(match.group(1)))
+    raise ValueError(
+        f"Chất lượng không hợp lệ: {quality!r}. "
+        f"Dùng 'best' hoặc số dòng, ví dụ: {', '.join(list(QUALITY_PRESETS)[1:])}."
+    )
+
+
+def format_sort_for(quality: str) -> list[str]:
+    """``format_sort`` của yt-dlp cho một mức chất lượng (xem ``config.QUALITY_PRESETS``)."""
+    q = normalize_quality(quality)
+    preset = QUALITY_PRESETS.get(q)
+    return list(preset) if preset else [f"res:{q}", VIDEO_FORMAT_PREFERENCE]
+
+
+@dataclass
+class ResolutionOption:
+    """Một mức độ phân giải mà video thực sự có."""
+
+    height: int  # số "p" danh nghĩa (1080, 720...), dùng làm giá trị chất lượng
+    fps: float | None = None
+    filesize: int | None = None  # ước tính: luồng video lớn nhất ở mức này + audio
+
+    @property
+    def quality(self) -> str:
+        return str(self.height)
+
+    @property
+    def label(self) -> str:
+        text = f"{self.height}p"
+        if self.fps and self.fps > 30:
+            text += str(round(self.fps))
+        tag = _RESOLUTION_TAGS.get(self.height)
+        return f"{text} ({tag})" if tag else text
+
+
+def _nominal_height(f: FormatInfo) -> int | None:
+    """Số "p" của định dạng: lấy từ format_note của YouTube, nếu không có thì min(rộng, cao)."""
+    if f.format_note:
+        match = _NOTE_HEIGHT_RE.match(f.format_note.strip())
+        if match:
+            return int(match.group(1))
+    dims = [d for d in (f.width, f.height) if d]
+    return min(dims) if dims else None
+
+
+def _audio_size_estimate(formats: list[FormatInfo]) -> int:
+    audio = [f for f in formats if f.is_audio_only and f.filesize]
+    preferred = [f for f in audio if f.ext == "m4a"] or audio
+    return max((f.filesize or 0 for f in preferred), default=0)
+
+
+def list_resolutions(media: MediaInfo) -> list[ResolutionOption]:
+    """Các độ phân giải video có sẵn, từ cao xuống thấp. Playlist -> ``[]``."""
+    if media.is_playlist:
+        return []
+    groups: dict[int, ResolutionOption] = {}
+    for f in media.formats:
+        if not f.has_video:
+            continue
+        height = _nominal_height(f)
+        if not height:
+            continue
+        opt = groups.setdefault(height, ResolutionOption(height=height))
+        if f.fps and (opt.fps is None or f.fps > opt.fps):
+            opt.fps = f.fps
+        if f.filesize and (opt.filesize is None or f.filesize > opt.filesize):
+            opt.filesize = f.filesize
+
+    audio_size = _audio_size_estimate(media.formats)
+    for opt in groups.values():
+        if opt.filesize is not None:
+            opt.filesize += audio_size
+    return sorted(groups.values(), key=lambda o: o.height, reverse=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -320,22 +436,22 @@ def download_video(
 ) -> list[Path]:
     """Tải video mp4 (ghép video + audio). Hỗ trợ URL playlist.
 
+    - ``quality``: ``"best"`` hoặc số dòng (``"1080"``, ``"720p"``, ``"804"``...). Lấy độ
+      phân giải lớn nhất không vượt quá mức đó; nếu video không có thì lấy mức nhỏ nhất.
     - ``history``: nếu có, ghi lịch sử và bỏ qua video đã tải (trừ khi ``force``).
       Video bị bỏ qua được báo qua callback với ``status="skipped"``.
     - ``cancel_event``: set event này để dừng → ``DownloadCancelledError``.
 
     Trả về danh sách đường dẫn các file đã lưu.
     """
-    if quality not in QUALITY_PRESETS:
-        raise ValueError(
-            f"Chất lượng không hợp lệ: {quality!r}. Chọn một trong: {', '.join(QUALITY_PRESETS)}"
-        )
+    format_sort = format_sort_for(quality)  # ValueError nếu chất lượng không hợp lệ
     _require_ffmpeg()
     out = Path(output_dir).expanduser()
     out.mkdir(parents=True, exist_ok=True)
 
     opts = _base_opts(out, progress_callback, cancel_event)
-    opts["format"] = QUALITY_PRESETS[quality]
+    opts["format"] = VIDEO_FORMAT
+    opts["format_sort"] = format_sort
     opts["merge_output_format"] = "mp4"
     return _run(
         url,
@@ -357,14 +473,25 @@ def download_audio(
     history: History | None = None,
     force: bool = False,
     cancel_event: threading.Event | None = None,
+    audio_quality: str = DEFAULT_AUDIO_QUALITY,
+    embed_metadata: bool = DEFAULT_EMBED_METADATA,
 ) -> list[Path]:
     """Chỉ tải audio và chuyển sang ``fmt`` (mặc định mp3). Hỗ trợ URL playlist.
 
     ``history``/``force``/``cancel_event``: như ``download_video``.
+    ``audio_quality``: ``"best"`` (VBR cao nhất) hoặc bitrate kbps, xem ``AUDIO_QUALITIES``
+    (không áp dụng cho wav).
+    ``embed_metadata``: gắn tiêu đề/nghệ sĩ/ngày đăng vào file; với mp3/m4a gắn thêm
+    thumbnail làm ảnh bìa.
     """
     if fmt not in AUDIO_FORMATS:
         raise ValueError(
             f"Định dạng audio không hợp lệ: {fmt!r}. Chọn một trong: {', '.join(AUDIO_FORMATS)}"
+        )
+    if audio_quality not in AUDIO_QUALITIES:
+        raise ValueError(
+            f"Bitrate không hợp lệ: {audio_quality!r}. "
+            f"Chọn một trong: {', '.join(AUDIO_QUALITIES)}"
         )
     _require_ffmpeg()
     out = Path(output_dir).expanduser()
@@ -372,9 +499,16 @@ def download_audio(
 
     opts = _base_opts(out, progress_callback, cancel_event)
     opts["format"] = "bestaudio/best"
-    opts["postprocessors"] = [
-        {"key": "FFmpegExtractAudio", "preferredcodec": fmt, "preferredquality": "0"},
+    preferred = "0" if audio_quality == "best" else audio_quality
+    postprocessors: list[dict[str, Any]] = [
+        {"key": "FFmpegExtractAudio", "preferredcodec": fmt, "preferredquality": preferred},
     ]
+    if embed_metadata:
+        postprocessors.append({"key": "FFmpegMetadata", "add_metadata": True})
+        if fmt in EMBED_THUMBNAIL_FORMATS:
+            opts["writethumbnail"] = True
+            postprocessors.append({"key": "EmbedThumbnail", "already_have_thumbnail": False})
+    opts["postprocessors"] = postprocessors
     return _run(
         url,
         opts,
