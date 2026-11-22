@@ -8,6 +8,11 @@ description: End-to-end checklist for adding or changing a youtube-vault feature
 Work through the layers in order. Skip a layer only when the feature truly doesn't touch it, and
 say so in your summary. Read `CLAUDE.md` first if it isn't in context.
 
+## 0. Orient with the knowledge graph
+- Before opening source files, ask the graph about the symbols you will touch:
+  `PYTHONIOENCODING=utf-8 graphify explain "<Symbol>"` (neighbours, callers, tests) and
+  `graphify affected "<Symbol>"` (what breaks if it changes). Then read only the lines it points to.
+
 ## 1. Config: `src/youtube_vault/config.py`
 - New presets, defaults, limits or delays go here as typed module constants (`NAME: type = value`).
 - Never read user-data paths (e.g. `HISTORY_DB`) at import time elsewhere. Tests monkeypatch them.
@@ -56,4 +61,5 @@ say so in your summary. Read `CLAUDE.md` first if it isn't in context.
 uv run pytest
 ```
 Then use `/launch-app` for a real-app smoke check of the touched front-end(s). The Stop hook will
-re-run pytest. Fix failures, don't bypass them.
+re-run pytest. Fix failures, don't bypass them. A second Stop hook refreshes
+`graphify-out/graph.json`; commit it together with the code change.

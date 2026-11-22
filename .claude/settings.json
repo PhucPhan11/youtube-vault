@@ -24,10 +24,44 @@
       "mcp__idea__search_text",
       "mcp__idea__read_file",
       "mcp__idea__list_directory_tree",
-      "mcp__idea__lint_files"
+      "mcp__idea__lint_files",
+      "Bash(graphify query *)",
+      "Bash(graphify explain *)",
+      "Bash(graphify path *)",
+      "Bash(graphify affected *)",
+      "Bash(graphify god-nodes*)",
+      "Bash(graphify update *)",
+      "PowerShell(graphify query *)",
+      "PowerShell(graphify explain *)",
+      "PowerShell(graphify path *)",
+      "PowerShell(graphify affected *)",
+      "PowerShell(graphify god-nodes*)",
+      "PowerShell(graphify update *)"
     ]
   },
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Grep",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "graphify hook-guard search",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Read|Glob",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "graphify hook-guard read",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [
@@ -36,6 +70,12 @@
             "command": "uv run --quiet --project \"$CLAUDE_PROJECT_DIR\" python \"$CLAUDE_PROJECT_DIR/.claude/hooks/run_tests.py\"",
             "timeout": 180,
             "statusMessage": "Running pytest..."
+          },
+          {
+            "type": "command",
+            "command": "uv run --quiet --project \"$CLAUDE_PROJECT_DIR\" python \"$CLAUDE_PROJECT_DIR/.claude/hooks/update_graph.py\"",
+            "timeout": 150,
+            "statusMessage": "Updating graphify graph..."
           }
         ]
       }

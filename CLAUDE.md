@@ -161,3 +161,25 @@ Key flows:
   the tail of the output, so fix the tests and don't work around the hook.
 - Skills: `/launch-app` (run the CLI or GUI and smoke-check it), `/add-feature` (end-to-end
   checklist: config → core → CLI → GUI → tests → README).
+- **Knowledge graph** (`graphify-out/`, see the `## graphify` section below): `graph.json`,
+  `GRAPH_REPORT.md` and `.graphify_labels.json` are committed; the rest is ignored. PreToolUse
+  hooks (`graphify hook-guard`) add a soft reminder before Grep/Read/Glob, never a block. The Stop
+  hook `.claude/hooks/update_graph.py` runs `graphify update .` (AST-only, no LLM) when `src/`,
+  `tests/` or `.claude/hooks` changed, so commit `graph.json` with the code. `update` doesn't
+  re-read docs; after big README/CLAUDE.md changes run `/graphify . --update`.
+  - On Windows prefix `PYTHONIOENCODING=utf-8` (labels contain Vietnamese) and cap output with
+    `--budget N`. Good entry points: `graphify explain "DownloadQueue"`,
+    `graphify affected "Cookies"`, `graphify path "App" "History"`.
+  - Caveats: the graph is undirected, so `source -> target` order in output is not call
+    direction; doc nodes (README/CLAUDE.md) are not linked to code symbols.
+
+## graphify
+
+This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
+
+Rules:
+- When graphify-out/graph.json exists, run `graphify query "<question>"` before your first grep, search or source-file read for a codebase question, and put this rule in every subagent prompt that explores code. Read raw files only for lines the graph or an earlier read already located. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
+- If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
+- Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
+- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
+- A committed graphify-out/graph.json is rewritten whole on every build, so a large diff to it in a pull request is expected. Do not flag it as churn or suggest skipping the graph rebuild or its hooks.

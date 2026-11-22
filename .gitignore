@@ -14,3 +14,9 @@ dist/
 .vscode/
 .mcp.json
 .claude/settings.local.json
+
+# graphify: commit only the graph, report and community labels
+graphify-out/*
+!graphify-out/graph.json
+!graphify-out/GRAPH_REPORT.md
+!graphify-out/.graphify_labels.json
